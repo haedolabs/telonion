@@ -7,6 +7,7 @@ By Haedo Labs. Push Gate reads what a git push would make public (every commit t
 - `pushgate/scan.py`: the word list, the credential formats, masking (`cleaner`: everything printed passes through it), and the reading of a push (`read_push`): the lines each commit adds, the names of the files it adds or renames, its message, its author and committer, the annotated tags that go with it, and the ref names the push creates.
 - `pushgate/hook.py`: git's pre-push hook (`prepush`: what the remote holds, asked with `git ls-remote`; the rewrite rule; the result as lines) and the hook's place in a repository (`install`, `uninstall`, `state`).
 - `pushgate/cli.py`, `bin/pushgate`: the command.
+- `brand/`: the logo. `python3 brand/logo.py` draws every file there and `docs/icon.png`, the README's icon.
 - `tests/`: unittest. `tests/_helpers.py` gives each test a temporary folder and replaces git's global and system settings and the word list for its run.
 
 ## Rules of the code

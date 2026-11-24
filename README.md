@@ -1,10 +1,10 @@
-# Push Gate
+# <img src="docs/icon.png" alt="" width="32" height="32"> Push Gate
 
 By [Haedo Labs](https://haedolabs.com).
 
 Push Gate reads what a git push would make public, and stops the push when that holds a word from your private list or a credential. It runs as git's pre-push hook on your own computer, and it sends nothing anywhere.
 
-**Status:** version 0.1.0. Not released.
+**Status:** version 0.1.0.
 
 ## What it reads
 

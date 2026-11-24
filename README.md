@@ -71,3 +71,7 @@ python3 -m unittest discover -s tests
 ```
 
 The tests use made-up words and made-up repositories. They replace git's global and system settings for their run, so they never read your word list or your git settings.
+
+## License
+
+MIT, © 2026 [Haedo Labs](https://haedolabs.com); see [LICENSE](LICENSE).

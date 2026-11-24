@@ -1,0 +1,5 @@
+# notes and settings for one machine: read by sessions here, never committed
+*.local.*
+__pycache__/
+*.pyc
+.DS_Store

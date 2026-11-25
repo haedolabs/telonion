@@ -68,10 +68,10 @@ def _pattern(text):
 
 class Words:
     """A private word list: one pattern a line, `allow: <pattern>` for text that may appear though it holds a word,
-    and # for notes."""
+    and # for notes. `paths` are the files it was read from."""
 
-    def __init__(self, path, words, allows):
-        self.path, self.words, self.allows = path, words, allows
+    def __init__(self, path, words, allows, paths=None):
+        self.path, self.words, self.allows, self.paths = path, words, allows, paths or [path]
 
     @classmethod
     def read(cls, path):
@@ -94,12 +94,40 @@ class Words:
                 words.append(_pattern(line))
         return cls(path, words, allows)
 
+    def joined(self, other):
+        """This list and `other` read as one: the words of both, and the allow lines of both."""
+        return Words(self.path, self.words + other.words, self.allows + other.allows, self.paths + other.paths)
+
     def spans(self, text):
         """Where the list's words are in `text`, leaving out text an allow pattern covers: [(start, end)]."""
         filled = text
         for a in self.allows:                      # allowed text becomes spaces of its own length: places stay put
             filled = a.sub(lambda m: ' ' * len(m.group(0)), filled)
         return [(m.start(), m.end()) for w in self.words for m in w.finditer(filled) if m.end() > m.start()]
+
+
+def own_words_path(repo='.'):
+    """A repository's own list, among git's own files and so never committed: <git common dir>/info/pushgate-words,
+    shared by the repository's worktrees. Its patterns add to the main list, and its allow lines apply to this
+    repository alone. None outside a repository."""
+    if not repo or not os.path.isdir(repo):
+        return None
+    r = subprocess.run(['git', '-C', repo, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    if r.returncode or not r.stdout.strip():
+        return None
+    return os.path.join(r.stdout.strip().split('\n')[-1], 'info', 'pushgate-words')
+
+
+def read_words(repo='.'):
+    """The main list (words_path) and the repository's own (own_words_path), read as one, or None when neither
+    exists. A list that exists and cannot be read raises OSError: a list that exists is never skipped."""
+    main = Words.read(words_path(repo))
+    own_path = own_words_path(repo)
+    own = Words.read(own_path) if own_path else None
+    if main is None or own is None:
+        return main or own
+    return main.joined(own)
 
 
 # Credentials.

@@ -3,7 +3,7 @@ import os
 import unittest
 
 from _helpers import TOKEN, Box
-from pushgate.scan import GitError, Words, fetched, read_push
+from pushgate.scan import GitError, Words, fetched, own_words_path, read_push, read_words
 
 WORDS = '# a note\npat\nsample\n\\bzephyr\\b\nproject-x\nallow: zephyr-free\nallow: sample\\.org/pat\n'
 
@@ -113,6 +113,28 @@ class PrivateWords(Box):
         os.makedirs(os.path.join(self.box, 'not-a-repo'))
         with self.assertRaises(GitError):
             read_push(os.path.join(self.box, 'not-a-repo'), ['HEAD'], [], Words.read(self.words_file))
+
+
+class OwnList(Box):
+    def test_a_repositorys_own_list_adds_words_and_allows_for_itself_alone(self):
+        self.words('zephyr\n')
+        a, b = self.repo('a'), self.repo('b')
+        for r in (a, b):
+            self.commit(r, {'n.txt': 'see zephyr-notes\na quokka here\nthe zephyr plan\n'})
+        own = own_words_path(a)
+        self.assertEqual(own, os.path.join(a, '.git', 'info', 'pushgate-words'))
+        with open(own, 'w') as f:
+            f.write('allow: zephyr-notes\nquokka\n')
+        hits = lambda r: sorted(x for _, x in read_push(r, ['HEAD'], [], read_words(r))['private'])
+        self.assertEqual(hits(a), ['a [private] here', 'the [private] plan'])
+        self.assertEqual(hits(b), ['see [private]-notes', 'the [private] plan'], 'the allow line reached another repository')
+        wt = os.path.join(self.box, 'wt')
+        self.git(a, 'worktree', 'add', '-q', wt, '-b', 'side')
+        self.assertEqual(own_words_path(wt), own, 'a worktree has a list of its own')
+        os.remove(self.words_file)
+        self.assertEqual(read_words(a).paths, [own], 'with no main list, the repository list alone')
+        self.assertIsNone(read_words(b))
+        self.assertIsNone(own_words_path(os.path.join(self.box, 'no-such-folder')))
 
 
 class Credentials(Box):

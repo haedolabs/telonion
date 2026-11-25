@@ -88,6 +88,40 @@ class PrePush(Box):
         self.assertEqual(code, 0, out)
         self.assertIn('credentials were checked, private words were not', out)
 
+    def own_hook(self, code):
+        """A pre-push hook of the repository's own: it writes what it was given to a log, then exits with `code`."""
+        path, log = os.path.join(self.box, 'own-hook'), os.path.join(self.box, 'own-hook.log')
+        with open(path, 'w') as f:
+            f.write(f'#!/bin/sh\n{{ echo "args: $*"; cat; }} > "{log}"\nexit {code}\n')
+        os.chmod(path, 0o755)
+        return path, log
+
+    def test_the_repositorys_own_check_runs_first_with_what_git_gave(self):
+        own, log = self.own_hook(0)
+        tip = self.commit(self.r, {'c.txt': 'fine\n'})
+        refs = f'refs/heads/main {tip} refs/heads/main {self.base}\n'
+        code, lines = hook.prepush(['origin', self.origin], refs, repo=self.r, first=own)
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(self.read(log), f'args: origin {self.origin}\n{refs}')
+        self.assertIn('ran first and passed', '\n'.join(lines))
+
+    def test_when_the_repositorys_own_check_stops_it_nothing_is_read(self):
+        own, _ = self.own_hook(3)
+        tip = self.commit(self.r, {'d.txt': 'the zephyr notes\n'})
+        code, lines = hook.prepush(['origin', self.origin], f'refs/heads/main {tip} refs/heads/main {self.base}\n',
+                                   repo=self.r, first=own)
+        self.assertEqual(code, 3, lines)
+        self.assertIn('did not read it', '\n'.join(lines))
+
+    def test_a_hook_file_that_is_not_executable_is_skipped_as_git_skips_it(self):
+        own, log = self.own_hook(1)
+        os.chmod(own, 0o644)
+        tip = self.commit(self.r, {'e.txt': 'fine\n'})
+        code, lines = hook.prepush(['origin', self.origin], f'refs/heads/main {tip} refs/heads/main {self.base}\n',
+                                   repo=self.r, first=own)
+        self.assertEqual(code, 0, lines)
+        self.assertFalse(os.path.exists(log))
+
     def test_a_list_that_cannot_be_read_stops_it(self):
         os.remove(self.words_file)
         os.makedirs(self.words_file)
@@ -120,19 +154,83 @@ class Install(Box):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn('Push Gate: 1 commit', p.stderr)
 
-    def test_another_tools_hook_is_left_alone(self):
-        r = self.repo()
-        self.assertTrue(hook.install(r)[0])
-        self.assertTrue(hook.uninstall(r)[0])
-        path = os.path.join(r, '.git', 'hooks', 'pre-push')
-        self.assertFalse(os.path.exists(path))
+    def write(self, path, text):
         with open(path, 'w') as f:
-            f.write('#!/bin/sh\nexit 0\n')
+            f.write(text)
+        os.chmod(path, 0o755)
+
+    def push(self, repo):
+        return subprocess.run(['git', '-C', repo, 'push', '-q', 'origin', 'main'], capture_output=True, text=True)
+
+    def test_the_repositorys_own_hook_is_kept_and_runs_first(self):
+        self.words('zephyr\n')
+        r, origin = self.repo(), self.bare()
+        self.commit(r, {'a.txt': 'start\n'})
+        self.git(r, 'remote', 'add', 'origin', origin)
+        path, chained = (os.path.join(r, '.git', 'hooks', name) for name in ('pre-push', hook.CHAINED))
+        log = os.path.join(self.box, 'own.log')
+        own = f'#!/bin/sh\ncat > /dev/null\necho ran >> "{log}"\nexit 0\n'
+        self.write(path, own)
+        done, words = hook.install(r)
+        self.assertTrue(done and 'runs first' in words, words)
+        self.assertEqual(self.read(chained), own)
+        self.assertTrue(os.access(chained, os.X_OK))
+        self.assertEqual((hook.state(r)['hook'], hook.state(r)['chained']), ('in place', True))
+        self.commit(r, {'b.txt': f'{TOKEN}\n'})
+        p = self.push(r)
+        self.assertNotEqual(p.returncode, 0, p.stderr)
+        self.assertIn('stopped', p.stderr)
+        self.assertEqual(self.read(log), 'ran\n', 'its own check ran first')
+        self.git(r, 'reset', '-q', '--hard', 'HEAD~1')
+        p = self.push(r)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn('ran first and passed', p.stderr)
+        self.assertEqual(self.read(log), 'ran\nran\n')
+        self.write(chained, '#!/bin/sh\necho "refused by its own check" >&2\nexit 1\n')
+        self.commit(r, {'c.txt': 'fine\n'})
+        p = self.push(r)
+        self.assertNotEqual(p.returncode, 0, p.stderr)
+        self.assertIn('refused by its own check', p.stderr)
+        self.assertIn('did not read it', p.stderr)
+        done, words = hook.uninstall(r)
+        self.assertTrue(done and 'put back' in words, words)
+        self.assertFalse(os.path.lexists(chained))
+        self.assertIn('refused by its own check', self.read(path))
+
+    def test_the_tool_that_wrote_the_hook_writes_it_again(self):
+        r = self.repo()
+        path, chained = (os.path.join(r, '.git', 'hooks', name) for name in ('pre-push', hook.CHAINED))
+        own = '#!/bin/sh\nexit 0\n'
+        self.write(path, own)
+        self.assertTrue(hook.install(r)[0])
+        self.write(path, own)                      # the same hook, written again in its old place
+        done, words = hook.install(r)
+        self.assertTrue(done, words)
+        self.assertEqual(hook.state(r)['hook'], 'in place')
+        self.assertEqual(self.read(chained), own)
+        self.write(path, '#!/bin/sh\nexit 2\n')    # a different one: nothing changes until a person keeps one
         done, words = hook.install(r)
         self.assertFalse(done)
-        self.assertIn('left as it is', words)
-        self.assertFalse(hook.uninstall(r)[0])
-        self.assertEqual(self.read(path), '#!/bin/sh\nexit 0\n')
+        self.assertIn('look at both', words)
+        self.assertEqual((self.read(path), self.read(chained)), ('#!/bin/sh\nexit 2\n', own))
+        self.assertFalse(hook.uninstall(r)[0], "another tool's hook was taken out")
+
+    def test_gits_template_gives_the_hook_to_new_repositories(self):
+        self.assertEqual(hook.template_state()['hook'], 'none')
+        done, words = hook.template_on()
+        self.assertTrue(done, words)
+        self.assertEqual(self.git(self.box, 'config', '--global', '--get', 'init.templateDir').strip(), hook.own_template())
+        made, cloned = os.path.join(self.box, 'made'), os.path.join(self.box, 'cloned')
+        subprocess.run(['git', 'init', '-q', made], check=True)
+        subprocess.run(['git', 'clone', '-q', made, cloned], check=True, capture_output=True)
+        self.assertEqual((hook.state(made)['hook'], hook.state(cloned)['hook']), ('in place', 'in place'))
+        self.assertTrue(hook.template_on()[0], 'a second time changes nothing')
+        done, words = hook.template_off()
+        self.assertTrue(done, words)
+        self.assertIsNone(hook.template_state()['dir'])
+        later = os.path.join(self.box, 'later')
+        subprocess.run(['git', 'init', '-q', later], check=True)
+        self.assertEqual(hook.state(later)['hook'], 'none')
 
     def test_worktrees_and_folders_inside_share_the_hook(self):
         r = self.repo()

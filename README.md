@@ -4,7 +4,7 @@ By [Haedo Labs](https://haedolabs.com).
 
 Push Gate reads what a git push would make public, and stops the push when that holds a word from your private list or a credential. It runs as git's pre-push hook on your own computer, and it sends nothing anywhere.
 
-**Status:** version 0.1.0.
+**Status:** version 0.2.0.
 
 ## What it reads
 
@@ -30,7 +30,7 @@ Push Gate: the push to origin is stopped
   private word: 3441baa notes/plan.md:4: the [private] notes
   a GitHub token: 3441baa conf.py:1: [credential]
   A hit stays in the commit that added it, and a later commit does not remove it: amend, squash, or rebase that commit before it leaves.
-  Text that may be public gets an `allow:` line in the word list (~/.config/pushgate/words.txt).
+  Text that may be public gets an `allow:` line in the word list (~/.config/pushgate/words.txt), or, for this repository alone, in its own (~/code/app/.git/info/pushgate-words).
   A credential that was ever pushed anywhere is revoked, not only removed.
 ```
 
@@ -44,6 +44,8 @@ One pattern a line: a regular expression, in which capitals and small letters ma
 
 `pushgate words --init` makes the list, readable by you alone. `pushgate words` counts its lines and never prints them.
 
+A repository can also keep a list of its own, among git's own files, so it is never committed: `.git/info/pushgate-words`, shared by the repository's worktrees. Its patterns add to the main list, and its `allow:` lines apply to that repository alone, so one project's ordinary words can pass there without passing everywhere. `pushgate words --init --here` makes it.
+
 ## Run it
 
 Needs Python 3.9 or later and git 2.31 or later. No other software.
@@ -51,12 +53,17 @@ Needs Python 3.9 or later and git 2.31 or later. No other software.
 ```bash
 bin/pushgate words --init            # make the word list, then add your words
 bin/pushgate install -C ~/code/app   # the hook in one repository (its worktrees share it)
+bin/pushgate template                # the hook in every repository made or cloned from now on
 bin/pushgate check -C ~/code/app     # what the next push would make public
 bin/pushgate check --all -C ~/code/app   # every commit, as before a first push
 bin/pushgate status ~/code/*         # which repositories have the hook
 ```
 
-`pushgate install` leaves another tool's pre-push hook in place, and it writes nothing when `core.hooksPath` sends git to a hooks folder that other repositories share.
+## Every repository
+
+`pushgate install` keeps a pre-push hook that the repository already has, and runs it first. That hook moves beside Push Gate's as `pre-push.chained` and gets the same arguments and the same refs, so a push goes only when both pass. When the repository's own hook stops a push, Push Gate does not read that push. `pushgate uninstall` puts the repository's own hook back in its place. `pushgate install` writes nothing when `core.hooksPath` sends git to a hooks folder that other repositories share.
+
+`pushgate template` puts the hook in git's template, so every repository made with `git init` or `git clone` from then on has it. When git has no template folder set, Push Gate makes its own from git's default template (`~/.config/pushgate/template`) and sets `init.templateDir`. `pushgate template --off` takes the hook out again.
 
 ## What it does not do
 

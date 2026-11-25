@@ -38,6 +38,20 @@ class Command(Box):
         self.assertNotIn('zephyr', p.stdout)
         self.assertEqual(self.run_command('check', '-C', self.box).returncode, 2, 'not a repository')
 
+    def test_a_repositorys_own_list(self):
+        r = self.repo()
+        p = self.run_command('words', '--init', '--here', '-C', r)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        own = os.path.join(r, '.git', 'info', 'pushgate-words')
+        self.assertEqual(os.stat(own).st_mode & 0o777, 0o600)
+        with open(own, 'a') as f:
+            f.write('quokka\nallow: zephyr-notes\n')
+        out = self.run_command('words', '-C', r).stdout
+        self.assertIn("this repository's own: ", out)
+        self.assertIn('1 pattern and 1 allow line', out)
+        self.assertNotIn('quokka', out)
+        self.assertIn('its own word list', self.run_command('status', r).stdout)
+
     def test_the_list_named_in_git_settings(self):
         del os.environ['PUSHGATE_WORDS']
         listed = os.path.join(self.box, 'elsewhere', 'my words.txt')
@@ -51,9 +65,13 @@ class Command(Box):
 
     def test_status_install_and_version(self):
         r = self.repo()
-        self.assertIn('no hook; no remote', self.run_command('status', r).stdout)
+        out = self.run_command('status', r).stdout
+        self.assertIn('no hook; no remote', out)
+        self.assertIn("new repositories: no hook (pushgate template puts it in git's template)", out)
         self.assertEqual(self.run_command('install', '-C', r).returncode, 0)
         self.assertIn('the hook is in place', self.run_command('status', r).stdout)
+        self.assertEqual(self.run_command('template').returncode, 0)
+        self.assertIn("new repositories: get the hook from git's template", self.run_command('status', r).stdout)
         self.assertEqual(self.run_command('--version').stdout.strip(), f'{NAME} {VERSION}')
 
 

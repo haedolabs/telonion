@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""logo.py - the Push Gate logo, drawn from its measures into brand/ and docs/.
+"""logo.py - the Telonion logo, drawn from its measures into brand/ and docs/.
 
-A field gate shut across the way of a push: a sapphire dot, the push, behind an off-white gate of two posts, two rails,
-and a brace; on near-black. The Haedo Labs product family's measures: a square of 64, the dot's radius 15.6 at the
-centre, lines 3.25 wide with round ends, inside 6..58.
+The toll house at the city gate, made a keep: an off-white wall with three merlons on top, closed by its floor, and
+inside it a sapphire dot, the push, held to be read before it passes; on near-black. The Haedo Labs product family's
+measures: a square of 64, the dot's radius 15.6, lines 3.25 wide with round ends and joins, inside 6..58. The crenels'
+edges stand in line with the dot's (16.4 and 47.6), and the dot is centred inside the keep, the same black above and
+below it (5.525), so its centre is at y 35.25 and not the family's 32.
 
     python3 brand/logo.py        writes brand/: logo.svg (rounded), logo-square.svg (square, for places that round or
-                                 crop a picture themselves), mark.svg (the dot and the gate alone, to lay on a page),
+                                 crop a picture themselves), mark.svg (the dot and the keep alone, to lay on a page),
                                  PNGs at 1024, 400, 180, and 32 pixels; and docs/icon.png (180, rounded) for the README
 
 Standard library only: the PNGs are drawn here, each pixel's coverage from its distance to each shape.
@@ -18,14 +20,25 @@ OUT = os.path.join(ROOT, 'brand')
 
 NEAR_BLACK, SAPPHIRE, OFF_WHITE = (0x11, 0x11, 0x10), (0x0f, 0x52, 0xba), (0xec, 0xe7, 0xdf)
 CORNER = 14                          # the square's corner radius
-DOT = 15.6                           # the dot's radius, at the centre: the push
-WIDTH = 3.25                         # the lines' width, round ends
+DOT = 15.6                           # the dot's radius: the push
+WIDTH = 3.25                         # the lines' width, round ends and joins
 A, B = 6, 58                         # the lines stay inside 6..58
-TOP, BOTTOM = 16, 48                 # the rails' heights
+MERLON, CRENEL = 6, 12.5             # the merlons' tops and the crenels' floors
+EDGES = (A, 16.4, 26.8, 37.2, 47.6, B)   # where the wall steps between merlon and crenel: five equal widths of 10.4
+DOT_Y = ((CRENEL + WIDTH / 2) + (B - WIDTH / 2)) / 2   # 35.25: halfway between the crenels' inner edge and the floor's
 
-# The gate: two posts, two rails, and the brace from the bottom rail at the hinge post to the top rail at the latch.
-SEGMENTS = [((A, A), (A, B)), ((B, A), (B, B)), ((A, TOP), (B, TOP)), ((A, BOTTOM), (B, BOTTOM)),
-            ((A, BOTTOM), (B, TOP))]
+# The keep, one closed line: up the left wall, along the battlements (merlon, crenel, merlon, crenel, merlon), down
+# the right wall, and back along the floor.
+POINTS = [(A, B), (A, MERLON)]
+for i, x in enumerate(EDGES[1:-1]):
+    y0, y1 = (MERLON, CRENEL) if i % 2 == 0 else (CRENEL, MERLON)
+    POINTS += [(x, y0), (x, y1)]
+POINTS += [(B, MERLON), (B, B)]
+SEGMENTS = list(zip(POINTS, POINTS[1:] + POINTS[:1]))
+
+
+def num(v):
+    return f'{v:g}'
 
 
 def hexc(c):
@@ -37,11 +50,11 @@ def svg(background=True, rounded=True):
     if background:
         corner = f' rx="{CORNER}"' if rounded else ''
         back = f'<rect width="64" height="64"{corner} fill="{hexc(NEAR_BLACK)}"/>'
-    lines = ''.join(f'<path d="M{x0} {y0}L{x1} {y1}"/>' for (x0, y0), (x1, y1) in SEGMENTS)
+    keep = 'M' + 'L'.join(f'{num(x)} {num(y)}' for x, y in POINTS) + 'Z'
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">{back}'
-            f'<circle cx="32" cy="32" r="{DOT}" fill="{hexc(SAPPHIRE)}"/>'
-            f'<g fill="none" stroke="{hexc(OFF_WHITE)}" stroke-width="{WIDTH}" stroke-linecap="round" stroke-linejoin="round">'
-            f'{lines}</g></svg>\n')
+            f'<circle cx="32" cy="{num(DOT_Y)}" r="{DOT}" fill="{hexc(SAPPHIRE)}"/>'
+            f'<path d="{keep}" fill="none" stroke="{hexc(OFF_WHITE)}" stroke-width="{WIDTH}" stroke-linecap="round" '
+            f'stroke-linejoin="round"/></svg>\n')
 
 
 def segment_distance(x, y, seg):
@@ -69,7 +82,7 @@ def png(side, rounded=True):
             else:
                 alpha = 1.0
             col = list(NEAR_BLACK)
-            for shape, c in ((math.hypot(x - 32, y - 32) - DOT, SAPPHIRE),
+            for shape, c in ((math.hypot(x - 32, y - DOT_Y) - DOT, SAPPHIRE),
                              (min(segment_distance(x, y, s) for s in SEGMENTS) - WIDTH / 2, OFF_WHITE)):
                 a = cover(shape)
                 if a: col = [col[i] + (c[i] - col[i]) * a for i in range(3)]

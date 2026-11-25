@@ -48,17 +48,44 @@ def config(repo, key, *kind):
     return [v for v in r.stdout.split('\n') if v] if r.returncode == 0 else []
 
 
+# The name before Telonion was Push Gate: its settings (pushgate.*), variables ($PUSHGATE_*), and files
+# (~/.config/pushgate/, info/pushgate-words) are still read wherever the new ones are not set, so nothing it set up
+# stops being read. `telonion install` moves a repository's own over to the new names.
+OLD = 'pushgate'
+
+
+def setting(repo, name, *kind, both=False):
+    """The setting telonion.<name>, else the old pushgate.<name>: every value, [] when neither is set. With `both`,
+    the values of the two together (for a setting that adds up, such as allowCode)."""
+    new = config(repo, f'telonion.{name}', *kind)
+    if new and not both:
+        return new
+    return new + config(repo, f'{OLD}.{name}', *kind)
+
+
+def env(name):
+    """$TELONION_<name>, else the old $PUSHGATE_<name>, else None."""
+    return os.environ.get(f'TELONION_{name}') or os.environ.get(f'PUSHGATE_{name}') or None
+
+
+def _home_config(*parts):
+    """~/.config/telonion/<parts>, or the old ~/.config/pushgate/<parts> when only that one exists."""
+    new = os.path.join(os.path.expanduser('~'), '.config', 'telonion', *parts)
+    old = os.path.join(os.path.expanduser('~'), '.config', OLD, *parts)
+    return old if not os.path.lexists(new) and os.path.lexists(old) else new
+
+
 # The private word list.
 
 def words_path(repo='.'):
-    """Where the private word list is: $PUSHGATE_WORDS, else `git config pushgate.words` (the repository's setting,
-    then the global one), else ~/.config/pushgate/words.txt."""
-    if os.environ.get('PUSHGATE_WORDS'):
-        return os.path.expanduser(os.environ['PUSHGATE_WORDS'])
-    set_in_git = config(repo, 'pushgate.words', '--type=path')
+    """Where the private word list is: $TELONION_WORDS, else `git config telonion.words` (the repository's setting,
+    then the global one), else ~/.config/telonion/words.txt; the old names (Push Gate's) where the new are not set."""
+    if env('WORDS'):
+        return os.path.expanduser(env('WORDS'))
+    set_in_git = setting(repo, 'words', '--type=path')
     if set_in_git:
         return os.path.expanduser(set_in_git[-1])
-    return os.path.join(os.path.expanduser('~'), '.config', 'pushgate', 'words.txt')
+    return _home_config('words.txt')
 
 
 def _pattern(text):
@@ -155,16 +182,19 @@ class Words:
 
 
 def own_words_path(repo='.'):
-    """A repository's own list, among git's own files and so never committed: <git common dir>/info/pushgate-words,
+    """A repository's own list, among git's own files and so never committed: <git common dir>/info/telonion-words,
     shared by the repository's worktrees. Its patterns add to the main list, and its allow lines apply to this
-    repository alone. None outside a repository."""
+    repository alone. The old name, info/pushgate-words, when only that one exists (`telonion install` moves it).
+    None outside a repository."""
     if not repo or not os.path.isdir(repo):
         return None
     r = subprocess.run(['git', '-C', repo, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
                        capture_output=True, text=True, stdin=subprocess.DEVNULL)
     if r.returncode or not r.stdout.strip():
         return None
-    return os.path.join(r.stdout.strip().split('\n')[-1], 'info', 'pushgate-words')
+    info = os.path.join(r.stdout.strip().split('\n')[-1], 'info')
+    new, old = os.path.join(info, 'telonion-words'), os.path.join(info, f'{OLD}-words')
+    return old if not os.path.lexists(new) and os.path.lexists(old) else new
 
 
 def read_words(repo='.'):

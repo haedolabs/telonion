@@ -5,7 +5,7 @@ import sys
 import unittest
 
 from _helpers import BIN, Box
-from pushgate import NAME, VERSION
+from telonion import NAME, VERSION
 
 
 class Command(Box):
@@ -42,7 +42,7 @@ class Command(Box):
         r = self.repo()
         p = self.run_command('words', '--init', '--here', '-C', r)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        own = os.path.join(r, '.git', 'info', 'pushgate-words')
+        own = os.path.join(r, '.git', 'info', 'telonion-words')
         self.assertEqual(os.stat(own).st_mode & 0o777, 0o600)
         with open(own, 'a') as f:
             f.write('quokka\nallow: zephyr-notes\n')
@@ -53,12 +53,12 @@ class Command(Box):
         self.assertIn('its own word list', self.run_command('status', r).stdout)
 
     def test_the_list_named_in_git_settings(self):
-        del os.environ['PUSHGATE_WORDS']
+        del os.environ['TELONION_WORDS']
         listed = os.path.join(self.box, 'elsewhere', 'my words.txt')
         os.makedirs(os.path.dirname(listed))
         with open(listed, 'w') as f:
             f.write('zephyr\n')
-        self.git(self.box, 'config', '--global', 'pushgate.words', listed)
+        self.git(self.box, 'config', '--global', 'telonion.words', listed)
         out = self.run_command('status', os.path.join(self.box, 'no-such-folder')).stdout
         self.assertIn('not a git repository', out)
         self.assertIn('~/elsewhere/my words.txt: 1 pattern', out)
@@ -66,8 +66,8 @@ class Command(Box):
     def test_status_install_and_version(self):
         r = self.repo()
         out = self.run_command('status', r).stdout
-        self.assertIn('no hooks (pushgate install writes them); no remote', out)
-        self.assertIn("new repositories: no hooks (pushgate template puts them in git's template)", out)
+        self.assertIn('no hooks (telonion install writes them); no remote', out)
+        self.assertIn("new repositories: no hooks (telonion template puts them in git's template)", out)
         self.assertEqual(self.run_command('install', '-C', r).returncode, 0)
         self.assertIn('the hooks are in place; no remote', self.run_command('status', r).stdout)
         self.assertEqual(self.run_command('template').returncode, 0)
@@ -86,9 +86,9 @@ class Command(Box):
         for name in ('pre-commit', 'commit-msg'):
             os.remove(os.path.join(r, '.git', 'hooks', name))
         self.assertIn("the pre-push hook is in place (after the repository's own), no pre-commit or commit-msg hook "
-                      "(pushgate install puts them in place)", self.run_command('status', r).stdout)
-        self.git(r, 'config', 'pushgate.checkCommits', 'false')
-        self.assertIn('the commit check is off here (pushgate.checkCommits)', self.run_command('status', r).stdout)
+                      "(telonion install puts them in place)", self.run_command('status', r).stdout)
+        self.git(r, 'config', 'telonion.checkCommits', 'false')
+        self.assertIn('the commit check is off here (telonion.checkCommits)', self.run_command('status', r).stdout)
 
     def test_check_staged(self):
         self.words('zephyr\n')

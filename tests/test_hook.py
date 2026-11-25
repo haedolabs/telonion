@@ -6,8 +6,8 @@ import subprocess
 import unittest
 
 from _helpers import TOKEN, Box
-from pushgate import hook
-from pushgate.scan import ZERO
+from telonion import hook
+from telonion.scan import ZERO
 
 
 class PrePush(Box):
@@ -48,12 +48,12 @@ class PrePush(Box):
         code, out = self.push(other, pushed)
         self.assertEqual(code, 1, out)
         self.assertIn('force push', out)
-        os.environ['PUSHGATE_ALLOW_REWRITE'] = '1'
+        os.environ['TELONION_ALLOW_REWRITE'] = '1'
         self.assertEqual(self.push(other, pushed)[0], 0, 'one rewrite on purpose')
-        del os.environ['PUSHGATE_ALLOW_REWRITE']
-        self.git(self.r, 'config', 'pushgate.allowRewrite', 'true')
+        del os.environ['TELONION_ALLOW_REWRITE']
+        self.git(self.r, 'config', 'telonion.allowRewrite', 'true')
         self.assertEqual(self.push(other, pushed)[0], 0, 'the rule turned off for this repository')
-        self.git(self.r, 'config', '--unset', 'pushgate.allowRewrite')
+        self.git(self.r, 'config', '--unset', 'telonion.allowRewrite')
         code, out = self.push(other, 'ab' * 20)
         self.assertEqual(code, 1, out)
         self.assertIn('fetch and look at it first', out)
@@ -193,7 +193,7 @@ class Commit(Box):
         self.assertEqual(self.commit_msg('the zephyr notes\n# a comment\n')[0], 1)
 
     def test_the_commit_check_turned_off_in_a_repository(self):
-        self.git(self.r, 'config', 'pushgate.checkCommits', 'false')
+        self.git(self.r, 'config', 'telonion.checkCommits', 'false')
         self.stage(self.r, {'b.txt': 'the zephyr notes\n'})
         code, out = self.pre_commit()
         self.assertEqual(code, 0, out)
@@ -221,7 +221,7 @@ class Commit(Box):
         self.stage(self.r, {'c.txt': 'the zephyr notes\n'})
         code, out = self.pre_commit(first=own)
         self.assertEqual(code, 3, out)
-        self.assertIn('stopped the commit, so Push Gate did not read it', out)
+        self.assertIn('stopped the commit, so Telonion did not read it', out)
 
     def test_a_list_that_cannot_be_read_stops_it(self):
         os.remove(self.words_file)
@@ -259,7 +259,7 @@ class Install(Box):
         self.git(r, 'reset', '-q', '--hard', 'HEAD~1')
         p = subprocess.run(['git', '-C', r, 'push', '-q', 'origin', 'main'], capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn('Push Gate: 1 commit', p.stderr)
+        self.assertIn('Telonion: 1 commit', p.stderr)
 
     def test_the_hooks_on_real_commits(self):
         self.words('zephyr\n')
@@ -278,15 +278,15 @@ class Install(Box):
         self.stage(r, {'b.txt': 'the zephyr notes\n'})
         p = commit('-m', 'notes')
         self.assertNotEqual(p.returncode, 0, p.stderr)
-        self.assertIn('Push Gate: the commit is stopped', p.stderr)
+        self.assertIn('Telonion: the commit is stopped', p.stderr)
         self.assertNotIn('zephyr', p.stderr)
         self.assertEqual(self.head(r), start, 'the commit was made')
         with open(os.path.join(r, 'a.txt'), 'a') as f:
             f.write('fine\n')
         p = commit('-m', 'only a.txt', 'a.txt')    # git builds an index of its own: the staged b.txt is not in it
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn('Push Gate: 1 added line and 0 new file names read for the commit', p.stderr)
-        self.assertIn('Push Gate: the commit message read', p.stderr)
+        self.assertIn('Telonion: 1 added line and 0 new file names read for the commit', p.stderr)
+        self.assertIn('Telonion: the commit message read', p.stderr)
         self.git(r, 'rm', '-q', '-f', 'b.txt')
         with open(os.path.join(r, 'a.txt'), 'a') as f:
             f.write('zephyr, not staged\n')

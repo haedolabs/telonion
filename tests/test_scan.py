@@ -4,7 +4,7 @@ import os
 import unittest
 
 from _helpers import TOKEN, Box
-from pushgate.scan import GitError, Words, fetched, own_words_path, read_commit, read_push, read_words
+from telonion.scan import GitError, Words, fetched, own_words_path, read_commit, read_push, read_words
 
 WORDS = '# a note\npat\nsample\n\\bzephyr\\b\nproject-x\nallow: zephyr-free\nallow: sample\\.org/pat\n'
 
@@ -123,7 +123,7 @@ class OwnList(Box):
         for r in (a, b):
             self.commit(r, {'n.txt': 'see zephyr-notes\na quokka here\nthe zephyr plan\n'})
         own = own_words_path(a)
-        self.assertEqual(own, os.path.join(a, '.git', 'info', 'pushgate-words'))
+        self.assertEqual(own, os.path.join(a, '.git', 'info', 'telonion-words'))
         with open(own, 'w') as f:
             f.write('allow: zephyr-notes\nquokka\n')
         hits = lambda r: sorted(x for _, x in read_push(r, ['HEAD'], [], read_words(r))['private'])

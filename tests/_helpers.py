@@ -9,23 +9,23 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-BIN = os.path.join(ROOT, 'bin', 'pushgate')
+BIN = os.path.join(ROOT, 'bin', 'telonion')
 TOKEN = 'gh' + 'p_' + 'A1b2C3d4' * 5               # built here, so no file in this repository holds a token
 
 
 class Box(unittest.TestCase):
     def setUp(self):
-        self.box = os.path.realpath(tempfile.mkdtemp(prefix='pushgate-test-'))
+        self.box = os.path.realpath(tempfile.mkdtemp(prefix='telonion-test-'))
         self.addCleanup(shutil.rmtree, self.box, True)
         saved = dict(os.environ)
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(saved)))
-        for key in [k for k in os.environ if k.startswith(('GIT_', 'PUSHGATE_'))]:
+        for key in [k for k in os.environ if k.startswith(('GIT_', 'TELONION_', 'PUSHGATE_'))]:
             del os.environ[key]
         gitconfig = os.path.join(self.box, 'gitconfig')
         open(gitconfig, 'w').close()
         self.words_file = os.path.join(self.box, 'words.txt')
         os.environ.update(HOME=self.box, GIT_CONFIG_GLOBAL=gitconfig, GIT_CONFIG_NOSYSTEM='1',
-                          PUSHGATE_WORDS=self.words_file, GIT_TERMINAL_PROMPT='0')
+                          TELONION_WORDS=self.words_file, GIT_TERMINAL_PROMPT='0')
 
     def words(self, text):
         with open(self.words_file, 'w') as f:

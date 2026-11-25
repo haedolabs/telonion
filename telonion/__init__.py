@@ -1,8 +1,8 @@
-"""Push Gate: reads what a git push would make public, and stops a push that holds a private word or a credential."""
+"""Telonion: reads what a git push would make public, and stops a push that holds a private word or a credential."""
 import os
 
-NAME = 'Push Gate'
-VERSION = '0.3.0'
+NAME = 'Telonion'
+VERSION = '0.4.0'
 
 
 def count(n, one, many=None):

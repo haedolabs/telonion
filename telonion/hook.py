@@ -1,7 +1,7 @@
-"""git's hooks: Push Gate's pre-push, pre-commit, and commit-msg hooks, their place in a repository, and in git's
+"""git's hooks: Telonion's pre-push, pre-commit, and commit-msg hooks, their place in a repository, and in git's
 template for the repositories made after it.
 
-Each hook runs the repository's own hook of the same name first, when it has one (kept beside Push Gate's as
+Each hook runs the repository's own hook of the same name first, when it has one (kept beside Telonion's as
 <name>.chained). The pre-push hook then reads what the push sends (scan.read_push) against what the remote holds now,
 asked at push time. It stops the push for a private word, a credential, or a new file that runs code, and it refuses a
 push that rewrites or deletes a branch on the remote, or lands on a remote commit this checkout has never seen. The
@@ -15,13 +15,13 @@ import subprocess
 import sys
 
 from . import NAME, count, listed, short_path
-from .scan import (GitError, ZERO, advertised, cleaner, config, own_words_path, present, read_commit, read_push,
-                   read_words, words_path)
+from .scan import (OLD, GitError, ZERO, advertised, cleaner, config, env, own_words_path, present, read_commit,
+                   read_push, read_words, setting, words_path)
 
 HOOKS = ('pre-push', 'pre-commit', 'commit-msg')
-MARK = 'Push Gate pre-push hook'
-CHAINED = 'pre-push.chained'                       # a repository's own pre-push hook, kept beside Push Gate's, run first
-LAUNCHER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'bin', 'pushgate')
+MARK = 'Telonion pre-push hook'
+CHAINED = 'pre-push.chained'                       # a repository's own pre-push hook, kept beside Telonion's, run first
+LAUNCHER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'bin', 'telonion')
 PY = shutil.which('python3') or sys.executable or '/usr/bin/python3'   # the PATH's python3, a stable link, not a
                                                                        # versioned path that an upgrade removes
 LIMIT = 30                                         # hits listed for each kind; the rest are counted
@@ -29,7 +29,13 @@ CUT = '------------------------ >8 ------------------------'           # git's s
 
 
 def mark(name):
-    """The words that mark a hook as Push Gate's."""
+    """The words that mark a hook as Telonion's."""
+    return f'Telonion {name} hook'
+
+
+def old_mark(name):
+    """The words that marked a hook as Telonion's under its old name, Push Gate: such a hook is Telonion's, out of
+    date, and still runs it (bin/pushgate is the old name of bin/telonion)."""
     return f'Push Gate {name} hook'
 
 
@@ -99,7 +105,7 @@ def prepush(argv, refs, repo=None, first=None):
     remote = argv[0] if argv else 'origin'
     url = argv[1] if len(argv) > 1 and argv[1] else remote
     repo = repo or os.getcwd()
-    rewrite_ok = os.environ.get('PUSHGATE_ALLOW_REWRITE') == '1' or 'true' in config(repo, 'pushgate.allowRewrite', '--type=bool')
+    rewrite_ok = env('ALLOW_REWRITE') == '1' or 'true' in setting(repo, 'allowRewrite', '--type=bool')
     stops = []                                     # (kind, words)
     notes = [f"this repository's own pre-push check ran first and passed ({CHAINED})"] if own == 0 else []
     tips, stop, tag_refs, names = [], [], [], []
@@ -137,7 +143,7 @@ def prepush(argv, refs, repo=None, first=None):
         except GitError as e:
             notes.append(f'could not list what {remote} holds ({e}), so more history was read than usual')
         try:
-            r = read_push(repo, tips, stop, words, config(repo, 'pushgate.allowCode'), tag_refs, names)
+            r = read_push(repo, tips, stop, words, setting(repo, 'allowCode', both=True), tag_refs, names)
         except GitError as e:
             stops.append(('error', f'could not read what the push sends: {e}'))
     if r:
@@ -157,9 +163,9 @@ def prepush(argv, refs, repo=None, first=None):
     if 'credential' in kinds:
         lines.append('  A credential that was ever pushed anywhere is revoked, not only removed.')
     if 'code' in kinds:
-        lines.append('  A file meant to run code: git config --add pushgate.allowCode <path or pattern>')
+        lines.append('  A file meant to run code: git config --add telonion.allowCode <path or pattern>')
     if 'rewrite' in kinds:
-        lines.append('  A rewrite or a deletion on purpose: PUSHGATE_ALLOW_REWRITE=1 for one push.')
+        lines.append('  A rewrite or a deletion on purpose: TELONION_ALLOW_REWRITE=1 for one push.')
     return 1, lines + [f'  {n}' for n in notes]
 
 
@@ -187,15 +193,15 @@ def commit_hook(name, argv, repo=None, first=None):
     """git's pre-commit hook (`name` 'pre-commit': what the commit adds, as staged, and who it is by) or its commit-msg
     hook ('commit-msg': the message, in the file git names as the first argument), read against the word lists and
     the credential formats. `first` is the repository's own hook of that name, run before anything is read; when it
-    stops the commit, nothing is read. Nothing is read either when the repository's pushgate.checkCommits is false.
+    stops the commit, nothing is read. Nothing is read either when the repository's telonion.checkCommits is false.
     -> (code, lines): 0 lets the commit go."""
     chained = f'{name}.chained'
     own = run_first(first, argv)
     if own:
         return own, [f"{NAME}: this repository's own {name} check ({chained}) stopped the commit, so {NAME} did not read it"]
     repo = repo or os.getcwd()
-    if config(repo, 'pushgate.checkCommits', '--type=bool')[-1:] == ['false']:
-        return 0, ([f'{NAME}: the commit check is off in this repository (pushgate.checkCommits)']
+    if setting(repo, 'checkCommits', '--type=bool')[-1:] == ['false']:
+        return 0, ([f'{NAME}: the commit check is off in this repository (telonion.checkCommits)']
                    if name == 'pre-commit' else [])
     notes = [f"this repository's own {name} check ran first and passed ({chained})"] if own == 0 else []
     words, stops, more = _lists(repo)
@@ -229,7 +235,7 @@ def commit_hook(name, argv, repo=None, first=None):
     if 'private' in kinds:
         lines.append(_allow(repo))
         lines.append('  A repository that holds private words on purpose, and is never made public: '
-                     'git config pushgate.checkCommits false (its pushes are still read).')
+                     'git config telonion.checkCommits false (its pushes are still read).')
     if 'credential' in kinds:
         lines.append('  A credential belongs in no commit: keep it outside the repository.')
     return 1, lines + [f'  {n}' for n in notes]
@@ -238,7 +244,7 @@ def commit_hook(name, argv, repo=None, first=None):
 # The hooks in a repository.
 
 def hook_paths(repo):
-    """Where git looks for each of Push Gate's hooks in this repository (core.hooksPath and worktrees taken into
+    """Where git looks for each of Telonion's hooks in this repository (core.hooksPath and worktrees taken into
     account): {name: path}, or None when `repo` is not a git repository."""
     r = subprocess.run(['git', '-C', repo, 'rev-parse', *[a for n in HOOKS for a in ('--git-path', f'hooks/{n}')]],
                        capture_output=True, text=True, stdin=subprocess.DEVNULL)
@@ -256,16 +262,16 @@ def hook_path(repo, name='pre-push'):
 
 
 def hook_body(name='pre-push'):
-    """The hook Push Gate writes as `name`."""
+    """The hook Telonion writes as `name`."""
     if name == 'pre-push':
         return ('#!/bin/sh\n'
-                f'# {MARK} (written by pushgate install): every push from this repository is read before it leaves.\n'
+                f'# {MARK} (written by telonion install): every push from this repository is read before it leaves.\n'
                 f'# A pre-push hook the repository had of its own runs first: {CHAINED}, beside this file.\n'
                 f'exec {shlex.quote(PY)} {shlex.quote(LAUNCHER)} hook --first "$(dirname "$0")/{CHAINED}" "$@"\n')
     what = {'pre-commit': 'what each commit adds is read before the commit is made',
             'commit-msg': "each commit's message is read before the commit is made"}[name]
     return ('#!/bin/sh\n'
-            f'# {mark(name)} (written by pushgate install): {what}.\n'
+            f'# {mark(name)} (written by telonion install): {what}.\n'
             f'# A {name} hook the repository had of its own runs first: {name}.chained, beside this file.\n'
             f'exec {shlex.quote(PY)} {shlex.quote(LAUNCHER)} hook --as {name} --first "$(dirname "$0")/{name}.chained" '
             f'-- "$@"\n')
@@ -280,13 +286,13 @@ def _read(path):
 
 
 def _kind(text, name='pre-push'):
-    return ('none' if text is None else 'in place' if text == hook_body(name) else 'out of date' if mark(name) in text
-            else "another tool's")
+    return ('none' if text is None else 'in place' if text == hook_body(name)
+            else 'out of date' if mark(name) in text or old_mark(name) in text else "another tool's")
 
 
 def _write_hook(path, name='pre-push'):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + '.pushgate-new'
+    tmp = path + '.telonion-new'
     with open(tmp, 'w', encoding='utf-8') as f:
         f.write(hook_body(name))
     os.chmod(tmp, 0o755)
@@ -299,11 +305,11 @@ def _hooks(names):
 
 
 def state(repo):
-    """Push Gate's hooks in `repo`, or 'not a repository'. For each of HOOKS (`hooks`: {name: {hook, path,
-    chained}}): 'in place', 'out of date' (Push Gate's, written for another place or Python), "another tool's", or
+    """Telonion's hooks in `repo`, or 'not a repository'. For each of HOOKS (`hooks`: {name: {hook, path,
+    chained}}): 'in place', 'out of date' (Telonion's, written for another place or Python), "another tool's", or
     'none', with where it is and whether the repository's own hook of that name is chained beside it; the pre-push
     hook's are also at the top. Also the repository's remotes, core.hooksPath, and whether its commits are read
-    (`commits`: pushgate.checkCommits is not false)."""
+    (`commits`: telonion.checkCommits is not false)."""
     paths = hook_paths(repo)
     if paths is None:
         return dict(hook='not a repository', path=None, chained=False, hooks={}, remotes=[], hooks_path=None,
@@ -313,14 +319,52 @@ def state(repo):
                              stdin=subprocess.DEVNULL).stdout.split()
     hooks_path = config(repo, 'core.hooksPath')
     return dict(hooks['pre-push'], hooks=hooks, remotes=remotes, hooks_path=hooks_path[-1] if hooks_path else None,
-                commits=config(repo, 'pushgate.checkCommits', '--type=bool')[-1:] != ['false'])
+                commits=setting(repo, 'checkCommits', '--type=bool')[-1:] != ['false'], old=old_names(repo))
 
 
-def install(repo):
-    """Push Gate's hooks written into `repo`: pre-push, pre-commit, and commit-msg. A hook of one of those names that
-    the repository has of its own is kept and run first: it moves beside Push Gate's as <name>.chained. Nothing is
-    written when core.hooksPath sends git to a shared folder, or when another tool's hook stands where Push Gate's
-    was with a different one chained beside it. -> (done, words)."""
+def _local_keys(repo, section):
+    r = subprocess.run(['git', '-C', repo, 'config', '--local', '--name-only', '--get-regexp', rf'^{section}\.'],
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    return r.stdout.split() if r.returncode == 0 else []
+
+
+def old_names(repo):
+    """What this repository keeps under Telonion's old name, Push Gate, and `telonion install` moves: its own word list
+    (info/pushgate-words) and its own settings (pushgate.*). All are still read where the new names are not set."""
+    found = []
+    own = own_words_path(repo)
+    if own and os.path.basename(own) == f'{OLD}-words':
+        found.append(f'info/{OLD}-words')
+    if _local_keys(repo, OLD):
+        found.append(f'{OLD}.* settings')
+    return found
+
+
+def move_old_names(repo):
+    """This repository's own word list and settings moved from Push Gate's names to Telonion's, in place: the list is
+    renamed (its lines are not read), and the settings move when the repository has none of the new name yet (else
+    the old ones stay, and are read where the new are not set). -> the names moved, in words."""
+    moved = []
+    own = own_words_path(repo)
+    if own and os.path.basename(own) == f'{OLD}-words':
+        new = os.path.join(os.path.dirname(own), 'telonion-words')
+        if not os.path.lexists(new):
+            os.rename(own, new)
+            moved.append(f'info/{OLD}-words to info/telonion-words')
+    if _local_keys(repo, OLD) and not _local_keys(repo, 'telonion'):
+        r = subprocess.run(['git', '-C', repo, 'config', '--local', '--rename-section', OLD, 'telonion'],
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        if r.returncode == 0:
+            moved.append(f'{OLD}.* settings to telonion.*')
+    return moved
+
+
+def install(repo, update=False):
+    """Telonion's hooks written into `repo`: pre-push, pre-commit, and commit-msg. A hook of one of those names that
+    the repository has of its own is kept and run first: it moves beside Telonion's as <name>.chained. Nothing is
+    written when core.hooksPath sends git to a shared folder, or when another tool's hook stands where Telonion's
+    was with a different one chained beside it. With `update`, the pre-push hook is put in place and the commit hooks
+    only where Telonion's (or Push Gate's) already are: no commit check is added. -> (done, words)."""
     s = state(repo)
     if s['path'] is None:
         return False, f'{repo} is not a git repository'
@@ -331,19 +375,29 @@ def install(repo):
     for n, h in s['hooks'].items():
         if h['hook'] == "another tool's" and h['chained'] and _read(h['path'] + '.chained') != _read(h['path']):
             return False, (f"another tool's {n} hook is at {h['path']}, and the {n}.chained beside it is a different "
-                           f'one: look at both, keep the one this repository needs as {n}.chained, then run pushgate '
+                           f'one: look at both, keep the one this repository needs as {n}.chained, then run telonion '
                            f'install again')
     written = []
     for n, h in s['hooks'].items():
-        if h['hook'] == 'in place':
+        if h['hook'] == 'in place' or (update and n != 'pre-push' and h['hook'] != 'out of date'):
             continue
         if h['hook'] == "another tool's" and not h['chained']:
             os.replace(h['path'], h['path'] + '.chained')   # the same name, beside: its mode and contents unchanged
         _write_hook(h['path'], n)                  # (or its tool wrote the same hook again: it stays chained)
         written.append(n)
     folder = short_path(os.path.dirname(s['path']))
-    words = (f'{_hooks(written)} written ({folder}): every push and every commit from here is read first' if written
-             else f'the hooks are in place ({folder})')
+    present = [n for n in HOOKS if n in written or s['hooks'][n]['hook'] == 'in place']
+    if written:
+        words = (f'{_hooks(written)} written ({folder}): every push and every commit from here is read first'
+                 if len(present) == len(HOOKS) else
+                 f'{_hooks(written)} written ({folder}): every push from here is read first')
+    else:
+        words = (f'the hooks are in place ({folder})' if len(present) == len(HOOKS)
+                 else f'{_hooks(present)} {"is" if len(present) == 1 else "are"} in place ({folder})')
+    moved = move_old_names(repo)
+    if moved:
+        words += f'; moved to the new name: {listed(moved)}'
+
     chained = [n for n in HOOKS if os.path.lexists(s['hooks'][n]['path'] + '.chained')]
     if chained:
         words += (f"; this repository's own {listed(chained)} {'hook runs' if len(chained) == 1 else 'hooks run'} "
@@ -352,8 +406,8 @@ def install(repo):
 
 
 def uninstall(repo):
-    """Push Gate's hooks taken out of `repo`, and the repository's own hooks put back in their place; another tool's
-    hook is left. -> (done, words): not done when another tool's hook stands where Push Gate's was and the
+    """Telonion's hooks taken out of `repo`, and the repository's own hooks put back in their place; another tool's
+    hook is left. -> (done, words): not done when another tool's hook stands where Telonion's was and the
     repository's own is still chained beside it, for a person to sort out."""
     s = state(repo)
     if s['path'] is None:
@@ -379,7 +433,7 @@ def uninstall(repo):
     if stuck:
         words.append(f"{listed(n + '.chained' for n in stuck)} still beside {'it' if len(left) == 1 else 'them'}: "
                      f'look at both, and keep the one this repository needs')
-    return not stuck, (', and '.join(words) if words else f'no Push Gate hook here ({folder})')
+    return not stuck, (', and '.join(words) if words else f'no Telonion hook here ({folder})')
 
 
 # The hooks in git's template, for every repository made or cloned after them.
@@ -391,8 +445,17 @@ def _global(key, *kind):
 
 
 def own_template():
-    """Push Gate's own template folder, made when git has none set."""
-    return os.path.join(os.path.expanduser('~'), '.config', 'pushgate', 'template')
+    """Telonion's own template folder, made when git has none set."""
+    return os.path.join(os.path.expanduser('~'), '.config', 'telonion', 'template')
+
+
+def old_template():
+    """The template folder Telonion made under its old name, Push Gate."""
+    return os.path.join(os.path.expanduser('~'), '.config', OLD, 'template')
+
+
+def _same(a, b):
+    return os.path.realpath(a) == os.path.realpath(b)
 
 
 def _git_template():
@@ -403,7 +466,7 @@ def _git_template():
 
 
 def template_state():
-    """Whether repositories made from now on get Push Gate's hooks: git's template folder (init.templateDir, a global
+    """Whether repositories made from now on get Telonion's hooks: git's template folder (init.templateDir, a global
     setting), or None, and each hook there (`hooks`: {name: 'in place', 'out of date', "another tool's", or
     'none'}); the pre-push hook's is also `hook`."""
     d = _global('init.templateDir', '--type=path')
@@ -415,8 +478,8 @@ def template_state():
 
 
 def template_on():
-    """Push Gate's hooks in git's template, so `git init` and `git clone` give them to every repository from now on.
-    When git has no template folder set, Push Gate makes its own from git's default template and sets
+    """Telonion's hooks in git's template, so `git init` and `git clone` give them to every repository from now on.
+    When git has no template folder set, Telonion makes its own from git's default template and sets
     init.templateDir. Nothing is written when another tool's hook of one of those names is there. -> (done, words)."""
     t = template_state()
     other = [n for n, k in t['hooks'].items() if k == "another tool's"]
@@ -424,6 +487,17 @@ def template_on():
         return False, (f"git's template ({short_path(t['dir'])}) has another tool's {listed(other)} "
                        f"{'hook' if len(other) == 1 else 'hooks'}: nothing was written")
     d = t['dir']
+    moved = False
+    if d and _same(d, old_template()) and not os.path.lexists(own_template()):
+        new = own_template()                       # Push Gate's own folder, moved to Telonion's name
+        os.makedirs(os.path.dirname(new), exist_ok=True)
+        os.rename(d, new)
+        r = subprocess.run(['git', 'config', '--global', 'init.templateDir', new], capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL)
+        if r.returncode:
+            os.rename(new, d)
+            return False, f'could not set init.templateDir: {r.stderr.strip()}'
+        d, moved = new, True
     if d is None:
         d = own_template()
         default = _git_template()
@@ -436,20 +510,21 @@ def template_on():
     for n, k in t['hooks'].items():
         if k != 'in place':
             _write_hook(os.path.join(d, 'hooks', n), n)
-    return True, f"repositories made or cloned from now on get the hooks from git's template ({short_path(d)})"
+    return True, (f"repositories made or cloned from now on get the hooks from git's template ({short_path(d)})"
+                  + (f' (moved from {short_path(old_template())})' if moved else ''))
 
 
 def template_off():
-    """Push Gate's hooks taken out of git's template; Push Gate's own template folder is unset as well, unless another
+    """Telonion's hooks taken out of git's template; Telonion's own template folder is unset as well, unless another
     tool's hook is there. -> (done, words)."""
     t = template_state()
     ours = [n for n, k in t['hooks'].items() if k in ('in place', 'out of date')]
     if not ours:
-        return True, "git's template has no Push Gate hook"
+        return True, "git's template has no Telonion hook"
     for n in ours:
         os.remove(os.path.join(t['dir'], 'hooks', n))
     if ("another tool's" not in t['hooks'].values()
-            and os.path.realpath(t['dir']) == os.path.realpath(own_template())):
+            and (_same(t['dir'], own_template()) or _same(t['dir'], old_template()))):
         subprocess.run(['git', 'config', '--global', '--unset', 'init.templateDir'], capture_output=True,
                        stdin=subprocess.DEVNULL)
         return True, "the hooks taken out of git's template, and git uses its default template again"

@@ -66,13 +66,74 @@ class Command(Box):
     def test_status_install_and_version(self):
         r = self.repo()
         out = self.run_command('status', r).stdout
-        self.assertIn('no hook; no remote', out)
-        self.assertIn("new repositories: no hook (pushgate template puts it in git's template)", out)
+        self.assertIn('no hooks (pushgate install writes them); no remote', out)
+        self.assertIn("new repositories: no hooks (pushgate template puts them in git's template)", out)
         self.assertEqual(self.run_command('install', '-C', r).returncode, 0)
-        self.assertIn('the hook is in place', self.run_command('status', r).stdout)
+        self.assertIn('the hooks are in place; no remote', self.run_command('status', r).stdout)
         self.assertEqual(self.run_command('template').returncode, 0)
-        self.assertIn("new repositories: get the hook from git's template", self.run_command('status', r).stdout)
+        self.assertIn("new repositories: get the hooks from git's template", self.run_command('status', r).stdout)
         self.assertEqual(self.run_command('--version').stdout.strip(), f'{NAME} {VERSION}')
+
+    def test_status_names_each_hook(self):
+        r = self.repo()
+        own = os.path.join(r, '.git', 'hooks', 'pre-push')
+        with open(own, 'w') as f:
+            f.write('#!/bin/sh\nexit 0\n')
+        os.chmod(own, 0o755)
+        self.assertEqual(self.run_command('install', '-C', r).returncode, 0)
+        self.assertIn("the hooks are in place (after the repository's own pre-push hook); no remote",
+                      self.run_command('status', r).stdout)
+        for name in ('pre-commit', 'commit-msg'):
+            os.remove(os.path.join(r, '.git', 'hooks', name))
+        self.assertIn("the pre-push hook is in place (after the repository's own), no pre-commit or commit-msg hook "
+                      "(pushgate install puts them in place)", self.run_command('status', r).stdout)
+        self.git(r, 'config', 'pushgate.checkCommits', 'false')
+        self.assertIn('the commit check is off here (pushgate.checkCommits)', self.run_command('status', r).stdout)
+
+    def test_check_staged(self):
+        self.words('zephyr\n')
+        r = self.repo()
+        self.commit(r, {'a.txt': 'fine\n'})
+        with open(os.path.join(r, 'b.txt'), 'w') as f:
+            f.write('the zephyr notes\n')
+        p = self.run_command('check', '--staged', '-C', r)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn('the next commit, as staged: 0 added lines and 0 new file names', p.stdout)
+        self.git(r, 'add', 'b.txt')
+        p = self.run_command('check', '--staged', '-C', r)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn('b.txt:1: the [private] notes', p.stdout)
+        self.assertNotIn('zephyr', p.stdout)
+        self.git(r, 'reset', '-q')
+        p = self.run_command('check', '--staged', '-C', r, '-m', 'notes on zephyr')
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn('commit message: notes on [private]', p.stdout)
+        message = os.path.join(self.box, 'message.txt')
+        with open(message, 'w') as f:
+            f.write('fine\n')
+        self.assertEqual(self.run_command('check', '--staged', '-C', r, '-F', message).returncode, 0)
+        self.assertEqual(self.run_command('check', '--staged', '-C', r, 'HEAD').returncode, 2, 'a tip with --staged')
+        self.assertEqual(self.run_command('check', '-C', r, '-m', 'fine').returncode, 2, 'a message with no --staged')
+        self.assertEqual(self.run_command('check', '--staged', '-C', self.box).returncode, 2, 'not a repository')
+
+    def test_included_lines_are_counted_never_shown(self):
+        names = os.path.join(self.box, 'quokka-lists', 'names.txt')
+        os.makedirs(os.path.dirname(names))
+        with open(names, 'w') as f:
+            f.write('quokka\nwombat\nallow: quokka-free\n')
+        self.words(f'zephyr\ninclude: {names}\n')
+        out = self.run_command('words').stdout
+        self.assertIn('3 patterns and 1 allow line, 2 patterns and 1 allow line of them from 1 included file', out)
+        for hidden in ('quokka', 'wombat', 'zephyr'):
+            self.assertNotIn(hidden, out)
+        os.remove(names)
+        r = self.repo()
+        self.commit(r, {'a.txt': 'fine\n'})
+        for args, code in ((['words'], 0), (['status', r], 0), (['check', '-C', r], 2), (['check', '--staged', '-C', r], 2)):
+            p = self.run_command(*args)
+            self.assertEqual(p.returncode, code, args)
+            self.assertIn('~/words.txt line 2: the file it includes is not there', p.stdout, args)
+            self.assertNotIn('quokka', p.stdout, args)
 
 
 if __name__ == '__main__':

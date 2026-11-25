@@ -2,12 +2,20 @@
 import os
 
 NAME = 'Push Gate'
-VERSION = '0.2.0'
+VERSION = '0.3.0'
 
 
 def count(n, one, many=None):
     """'1 commit', '2 commits'."""
     return f'{n} {one if n == 1 else (many or one + "s")}'
+
+
+def listed(items, word='and'):
+    """'a', 'a and b', 'a, b, and c' (or with `word` 'or')."""
+    items = list(items)
+    if len(items) < 3:
+        return f' {word} '.join(items)
+    return f'{", ".join(items[:-1])}, {word} {items[-1]}'
 
 
 def short_path(path):

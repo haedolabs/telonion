@@ -55,14 +55,18 @@ class Box(unittest.TestCase):
         subprocess.run(['git', 'init', '-q', '--bare', path], check=True)
         return path
 
-    def commit(self, repo, files, message='c'):
+    def stage(self, repo, files):
+        """`files` written and staged for the next commit."""
         for name, text in files.items():
             path = os.path.join(repo, name)
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, 'w') as f:
                 f.write(text)
         self.git(repo, 'add', '-A')
-        self.git(repo, 'commit', '-q', '-m', message)
+
+    def commit(self, repo, files, message='c'):
+        self.stage(repo, files)
+        self.git(repo, 'commit', '-q', '--no-verify', '-m', message)
         return self.head(repo)
 
     def head(self, repo, ref='HEAD'):

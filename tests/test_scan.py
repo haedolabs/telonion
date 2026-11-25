@@ -1,9 +1,10 @@
-"""The reading of a push: private words and credentials in every commit the remote does not hold, each on its own."""
+"""The reading of a push: private words and credentials in every commit the remote does not hold, each on its own;
+the reading of the next commit; and the word lists, with the files they include."""
 import os
 import unittest
 
 from _helpers import TOKEN, Box
-from pushgate.scan import GitError, Words, fetched, own_words_path, read_push, read_words
+from pushgate.scan import GitError, Words, fetched, own_words_path, read_commit, read_push, read_words
 
 WORDS = '# a note\npat\nsample\n\\bzephyr\\b\nproject-x\nallow: zephyr-free\nallow: sample\\.org/pat\n'
 
@@ -135,6 +136,127 @@ class OwnList(Box):
         self.assertEqual(read_words(a).paths, [own], 'with no main list, the repository list alone')
         self.assertIsNone(read_words(b))
         self.assertIsNone(own_words_path(os.path.join(self.box, 'no-such-folder')))
+
+
+class Includes(Box):
+    def setUp(self):
+        super().setUp()
+        self.lists = os.path.join(self.box, 'lists')
+        os.makedirs(self.lists)
+
+    def list_file(self, name, text):
+        path = os.path.join(self.lists, name)
+        with open(path, 'w') as f:
+            f.write(text)
+        return path
+
+    def test_an_included_file_adds_its_patterns_and_allow_lines(self):
+        self.list_file('names.txt', '# written by another tool\nquokka\nallow: quokka-free\n')
+        self.words(f'zephyr\ninclude: {os.path.join(self.lists, "names.txt")}\n')
+        r = self.repo()
+        self.commit(r, {'n.txt': 'a quokka here\nthis is quokka-free\nthe zephyr plan\n'})
+        words = read_words(r)
+        self.assertEqual((len(words.words), len(words.allows), words.included), (2, 1, (1, 1, 1)))
+        self.assertEqual(sorted(x for _, x in read_push(r, ['HEAD'], [], words)['private']),
+                         ['a [private] here', 'the [private] plan'])
+
+    def test_a_path_from_home_or_from_the_folder_of_the_list_that_names_it(self):
+        self.list_file('a.txt', 'quokka\ninclude: b.txt\n')
+        self.list_file('b.txt', 'wombat\n')
+        self.words('include: ~/lists/a.txt\nINCLUDE: lists/b.txt\n')
+        w = Words.read(self.words_file)
+        self.assertEqual((len(w.words), w.included), (2, (2, 2, 0)), 'a file named twice is read once')
+
+    def test_an_include_that_leads_back_to_the_list_ends_there(self):
+        self.list_file('a.txt', f'quokka\ninclude: {self.words_file}\n')
+        self.words('zephyr\ninclude: ~/lists/a.txt\n')
+        w = Words.read(self.words_file)
+        self.assertEqual((len(w.words), w.included), (2, (1, 1, 0)))
+
+    def test_an_include_that_is_missing_or_cannot_be_read_stops_the_reading(self):
+        hidden = os.path.join(self.box, 'quokka-folder', 'names.txt')
+        for line, says in ((f'include: {hidden}', 'the file it includes is not there'),
+                           (f'include: {self.lists}', 'the file it includes could not be read'),
+                           ('include:', 'an include that names no file')):
+            self.words(f'zephyr\n{line}\n')
+            with self.assertRaises(OSError) as e:
+                Words.read(self.words_file)
+            self.assertEqual(str(e.exception).split(' (')[0], f'~/words.txt line 2: {says}')
+        if os.geteuid():                           # root reads a file whatever its mode
+            locked = self.list_file('locked.txt', 'quokka\n')
+            os.chmod(locked, 0)
+            self.words(f'include: {locked}\n')
+            with self.assertRaises(OSError):
+                Words.read(self.words_file)
+
+    def test_an_include_inside_an_included_file_names_its_place(self):
+        self.list_file('a.txt', 'quokka\n\ninclude: missing.txt\n')
+        self.words('zephyr\ninclude: ~/lists/a.txt\n')
+        with self.assertRaises(OSError) as e:
+            Words.read(self.words_file)
+        self.assertEqual(str(e.exception),
+                         '~/words.txt line 2, line 3 of the file it includes: the file it includes is not there')
+
+    def test_a_repositorys_own_list_includes_for_itself_alone(self):
+        self.words('zephyr\n')
+        names = self.list_file('names.txt', 'quokka\n')
+        a, b = self.repo('a'), self.repo('b')
+        for r in (a, b):
+            self.commit(r, {'n.txt': 'a quokka here\n'})
+        with open(own_words_path(a), 'w') as f:
+            f.write(f'include: {names}\n')
+        hits = lambda r: [x for _, x in read_push(r, ['HEAD'], [], read_words(r))['private']]
+        self.assertEqual((hits(a), hits(b)), (['a [private] here'], []))
+        self.assertEqual(read_words(a).included, (1, 1, 0))
+
+
+class NextCommit(Box):
+    def setUp(self):
+        super().setUp()
+        self.words('zephyr\nproject-x\n')
+        self.r = self.repo()
+
+    def read(self, **kw):
+        return read_commit(self.r, Words.read(self.words_file), **kw)
+
+    def test_before_the_first_commit_everything_staged_is_read(self):
+        self.stage(self.r, {'a.txt': 'the zephyr notes\n', 'project-x.md': 'fine\n'})
+        r = self.read()
+        self.assertEqual(sorted(r['private']), [('a.txt:1', 'the [private] notes'), ('new file', '[private].md')])
+        self.assertEqual((r['lines'], r['files']), (2, 2))
+
+    def test_only_what_the_commit_adds(self):
+        self.commit(self.r, {'a.txt': 'an old zephyr line\n'})
+        with open(os.path.join(self.r, 'a.txt'), 'a') as f:
+            f.write('a new line\n')
+        self.git(self.r, 'add', 'a.txt')
+        with open(os.path.join(self.r, 'a.txt'), 'a') as f:
+            f.write('zephyr, changed but not staged\n')
+        r = self.read()
+        self.assertEqual((r['private'], r['lines'], r['files']), ([], 1, 0))
+
+    def test_a_rename_to_a_name_that_holds_a_word(self):
+        self.commit(self.r, {'plain.md': 'a\n'})
+        self.git(self.r, 'mv', 'plain.md', 'project-x.md')
+        self.assertEqual(self.read()['private'], [('new file', '[private].md')])
+
+    def test_credentials_and_files_that_hold_keys(self):
+        self.stage(self.r, {'conf.py': f'TOKEN = "{TOKEN}"\n', '.env': 'x\n'})
+        hits = self.read()['credentials']
+        self.assertEqual(sorted(what for _, what, _ in hits), ['a GitHub token', 'a file that holds keys by its name'])
+        self.assertFalse(any(TOKEN in w + x for w, _, x in hits), 'a token was shown')
+
+    def test_the_message_and_who_the_commit_is_by(self):
+        self.stage(self.r, {'a.txt': 'fine\n'})
+        self.assertEqual(self.read(staged=False, message='notes for zephyr\n\nmore\n')['private'],
+                         [('commit message', 'notes for [private]')])
+        self.git(self.r, 'config', 'user.name', 'Zephyr Sample')
+        self.assertEqual(sorted(w for w, _ in self.read()['private']), ['author', 'committer'])
+
+    def test_a_failing_git_command_is_never_clean(self):
+        os.makedirs(os.path.join(self.box, 'not-a-repo'))
+        with self.assertRaises(GitError):
+            read_commit(os.path.join(self.box, 'not-a-repo'), Words.read(self.words_file))
 
 
 class Credentials(Box):

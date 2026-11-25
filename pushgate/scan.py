@@ -1,8 +1,10 @@
-"""What a push makes public, read before it leaves: every commit the remote does not hold, each on its own.
+"""What a push makes public, read before it leaves (every commit the remote does not hold, each on its own), and what
+the next commit adds, read before it is made.
 
-The same commits are read two ways. Private words: a list kept outside every repository, one pattern a line, with
-`allow:` lines for text that may appear. Credentials: tokens and keys by their fixed formats, files that hold them by
-name, and new files that make code run on a hosting service or on install.
+The same text is read two ways. Private words: lists kept outside every repository, one pattern a line, with `allow:`
+lines for text that may appear and `include:` lines that read other lists as part of them. Credentials: tokens and keys
+by their fixed formats, files that hold them by name, and new files that make code run on a hosting service or on
+install.
 
 Nothing found is printed in full. Each hit names its place, and the word or credential in it is masked, so output that
 lands in a terminal log or an assistant's transcript does not repeat what the check exists to keep private.
@@ -11,6 +13,8 @@ import fnmatch
 import os
 import re
 import subprocess
+
+from . import short_path
 
 ZERO = '0' * 40
 EXCERPT = 160                                      # characters of a line shown with a hit, after masking
@@ -66,37 +70,81 @@ def _pattern(text):
         return re.compile(re.escape(text), re.I)
 
 
+class ListError(OSError):
+    """A list's `include:` line names a file that is not there or cannot be read. Its words name the list and the
+    line, never the file the line names: an include's path is a line of a private list, and lines are never printed."""
+
+
+def _lines(path):
+    with open(path, encoding='utf-8', errors='replace') as f:
+        return f.read().split('\n')
+
+
 class Words:
     """A private word list: one pattern a line, `allow: <pattern>` for text that may appear though it holds a word,
-    and # for notes. `paths` are the files it was read from."""
+    `include: <path>` for another list read as part of this one, and # for notes. `paths` are the lists it was read
+    from; `included` counts what the files they include gave: (files, patterns, allow lines)."""
 
-    def __init__(self, path, words, allows, paths=None):
+    def __init__(self, path, words, allows, paths=None, included=(0, 0, 0)):
         self.path, self.words, self.allows, self.paths = path, words, allows, paths or [path]
+        self.included = included
 
     @classmethod
     def read(cls, path):
-        """The list at `path`, or None when no file is there. A file that is there and cannot be read raises OSError:
-        a list that exists is never skipped."""
+        """The list at `path` with the files it includes, or None when no file is there. A list that is there and
+        cannot be read raises OSError, and so does an include whose file is not there or cannot be read (ListError):
+        no part of a list that exists is skipped.
+
+        An include's path starts from ~ or from the folder of the list that names it. An included file is read under
+        the same rules, its own includes too, and once however many lines name it."""
         try:
-            with open(path, encoding='utf-8', errors='replace') as f:
-                lines = f.read().split('\n')
+            lines = _lines(path)
         except FileNotFoundError:
             return None
-        words, allows = [], []
-        for line in lines:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            if line.lower().startswith('allow:'):
-                if line[6:].strip():
-                    allows.append(_pattern(line[6:].strip()))
-            else:
-                words.append(_pattern(line))
-        return cls(path, words, allows)
+        words, allows, seen, given = [], [], {os.path.realpath(path)}, [0, 0]    # given: by included files
+
+        def take(lines, folder, at, depth):
+            for n, line in enumerate(lines, 1):
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                key = line[:8].lower()
+                if key.startswith('allow:'):
+                    if line[6:].strip():
+                        allows.append(_pattern(line[6:].strip()))
+                        if depth:
+                            given[1] += 1
+                elif key == 'include:':
+                    include(line[8:].strip(), folder, at(n), depth + 1)
+                else:
+                    words.append(_pattern(line))
+                    if depth:
+                        given[0] += 1
+
+        def include(name, folder, where, depth):
+            if not name:
+                raise ListError(f'{where}: an include that names no file')
+            file = os.path.join(folder, os.path.expanduser(name))
+            if os.path.realpath(file) in seen:     # read already: once is enough, and a loop ends here
+                return
+            try:
+                lines = _lines(file)
+            except FileNotFoundError:
+                raise ListError(f'{where}: the file it includes is not there') from None
+            except OSError as e:
+                raise ListError(f'{where}: the file it includes could not be read '
+                                f'({e.strerror or type(e).__name__})') from None
+            seen.add(os.path.realpath(file))
+            take(lines, os.path.dirname(file), lambda m: f'{where}, line {m} of the file it includes', depth)
+
+        top = short_path(os.path.abspath(path))
+        take(lines, os.path.dirname(os.path.abspath(path)), lambda n: f'{top} line {n}', 0)
+        return cls(path, words, allows, included=(len(seen) - 1, given[0], given[1]))
 
     def joined(self, other):
         """This list and `other` read as one: the words of both, and the allow lines of both."""
-        return Words(self.path, self.words + other.words, self.allows + other.allows, self.paths + other.paths)
+        return Words(self.path, self.words + other.words, self.allows + other.allows, self.paths + other.paths,
+                     tuple(a + b for a, b in zip(self.included, other.included)))
 
     def spans(self, text):
         """Where the list's words are in `text`, leaving out text an allow pattern covers: [(start, end)]."""
@@ -241,6 +289,71 @@ def advertised(repo, remote, timeout=60):
     return [line.split('\t')[0] for line in out.split('\n') if '\t' in line]
 
 
+class _Reading:
+    """What a reading finds, each hit once, with its place and its text masked. New files that run code on a host or
+    on install are looked for only when `allow_code` is given (the paths a repository allows), as for a push."""
+
+    def __init__(self, words, allow_code=None):
+        self.words, self.clean, self.seen = words, cleaner(words), set()
+        self.allow_code = None if allow_code is None else list(allow_code)
+        self.private, self.credentials, self.code = [], [], []
+
+    def look(self, where, text, key, credentials=True):
+        if self.words is not None and ('p', key) not in self.seen and self.words.spans(text):
+            self.seen.add(('p', key))
+            self.private.append((self.clean(where), _excerpt(self.clean(text))))
+        what = credential_spans(text)[0] if credentials else None
+        if what and ('c', key) not in self.seen:
+            self.seen.add(('c', key))
+            self.credentials.append((self.clean(where), what, _excerpt(self.clean(text))))
+
+    def look_name(self, where, name):
+        """A file that is added or renamed: its name, and what the name says it holds or does."""
+        self.look(where, name, ('name', name))
+        if KEY_FILES.search(name) and not KEY_FILES_OK.search(name) and ('k', name) not in self.seen:
+            self.seen.add(('k', name))
+            self.credentials.append((self.clean(where), 'a file that holds keys by its name', _excerpt(self.clean(name))))
+        if (self.allow_code is not None and RUNS_CODE.search(name) and ('r', name) not in self.seen
+                and not any(fnmatch.fnmatchcase(name, a) for a in self.allow_code)):
+            self.seen.add(('r', name))
+            self.code.append((self.clean(where), _excerpt(self.clean(name))))
+
+
+def _walk(patch, on_line, on_name):
+    """A patch with raw lines, walked: on_line(sha, path, n, text) for each line it adds (n: the line's number in the
+    new file), and on_name(sha, name) for each file it adds or renames. `sha` is the commit whose diff follows, from
+    git diff-tree --stdin; '' for a diff that is not a commit's."""
+    sha, path, n, old, new = '', '', 0, 0, 0
+    for line in patch.split('\n'):
+        if old > 0 or new > 0:                     # inside a hunk, whose header counts its lines: none is a header
+            if line.startswith('+'):
+                new -= 1
+                on_line(sha, path, n, line[1:])
+                n += 1
+            elif line.startswith('-'):
+                old -= 1
+            elif line.startswith(' '):
+                old, new, n = old - 1, new - 1, n + 1
+            continue
+        if _SHA.match(line):                       # the commit whose diff follows (a merge's comes once a parent)
+            sha = line
+        elif line.startswith(':') and '\t' in line:   # a raw line: the status, then the file names
+            f = line.split('\t')
+            if f[0].split()[-1][:1] in ('A', 'R'):
+                on_name(sha, _unquote(f[-1]))
+        elif line.startswith('+++ '):
+            p = _unquote(line[4:].rstrip('\t'))
+            path = p[2:] if p.startswith('b/') else p
+        else:
+            m = _HUNK.match(line)
+            if m:
+                old, n, new = int(m.group(1) or 1), int(m.group(2)), int(m.group(3) or 1)
+
+
+_DIFF = ('--patch-with-raw', '-M', '--unified=0', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/',
+         '--dst-prefix=b/')
+
+
 def read_push(repo, tips, stop=(), words=None, allow_code=(), tag_refs=(), ref_names=()):
     """What a push of `tips` makes public beyond the commits under `stop`, read against `words` (a Words, or None when
     there is no list) and the credential formats.
@@ -252,63 +365,22 @@ def read_push(repo, tips, stop=(), words=None, allow_code=(), tag_refs=(), ref_n
 
     -> {commits, lines, files, private: [(where, excerpt)], credentials: [(where, what, excerpt)],
         code: [(where, name)]}, every text masked. GitError when a git command fails: never a clean reading."""
-    out = dict(commits=0, lines=0, files=0, private=[], credentials=[], code=[])
-    clean, seen = cleaner(words), set()
-    allow_code = list(allow_code)
+    found, out, names = _Reading(words, allow_code), dict(commits=0, lines=0, files=0), set()
 
-    def look(where, text, key, credentials=True):
-        if words is not None and ('p', key) not in seen and words.spans(text):
-            seen.add(('p', key))
-            out['private'].append((clean(where), _excerpt(clean(text))))
-        what = credential_spans(text)[0] if credentials else None
-        if what and ('c', key) not in seen:
-            seen.add(('c', key))
-            out['credentials'].append((clean(where), what, _excerpt(clean(text))))
+    def added(sha, path, n, text):
+        out['lines'] += 1
+        found.look(f'{sha[:7]} {path}:{n}', text, ('line', path, text))
 
-    def look_name(sha, name):
-        look(f'{sha[:7]} new file', name, ('name', name))
-        if KEY_FILES.search(name) and not KEY_FILES_OK.search(name) and ('k', name) not in seen:
-            seen.add(('k', name))
-            out['credentials'].append((f'{sha[:7]} new file', 'a file that holds keys by its name', _excerpt(clean(name))))
-        if RUNS_CODE.search(name) and not any(fnmatch.fnmatchcase(name, a) for a in allow_code) and ('r', name) not in seen:
-            seen.add(('r', name))
-            out['code'].append((f'{sha[:7]} new file', _excerpt(clean(name))))
+    def named(sha, name):
+        if name not in names:
+            names.add(name)
+            out['files'] += 1
+        found.look_name(f'{sha[:7]} new file', name)
 
     shas = commits(repo, tips, stop)
     feed = ''.join(s + '\n' for s in shas)
     if shas:
-        patch = git(repo, 'diff-tree', '--stdin', '--patch-with-raw', '-m', '-r', '--root', '-M', '--unified=0',
-                    '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/', stdin=feed)
-        names, sha, path, n, old, new = set(), '', '', 0, 0, 0
-        for line in patch.split('\n'):
-            if old > 0 or new > 0:                 # inside a hunk, whose header counts its lines: none is a header
-                if line.startswith('+'):
-                    new -= 1
-                    out['lines'] += 1
-                    look(f'{sha[:7]} {path}:{n}', line[1:], ('line', path, line[1:]))
-                    n += 1
-                elif line.startswith('-'):
-                    old -= 1
-                elif line.startswith(' '):
-                    old, new, n = old - 1, new - 1, n + 1
-                continue
-            if _SHA.match(line):                   # the commit whose diff follows (a merge's comes once a parent)
-                sha = line
-            elif line.startswith(':') and '\t' in line:   # a raw line: the status, then the file names
-                f = line.split('\t')
-                if f[0].split()[-1][:1] in ('A', 'R'):
-                    name = _unquote(f[-1])
-                    if name not in names:
-                        names.add(name)
-                        out['files'] += 1
-                    look_name(sha, name)
-            elif line.startswith('+++ '):
-                p = _unquote(line[4:].rstrip('\t'))
-                path = p[2:] if p.startswith('b/') else p
-            else:
-                m = _HUNK.match(line)
-                if m:
-                    old, n, new = int(m.group(1) or 1), int(m.group(2)), int(m.group(3) or 1)
+        _walk(git(repo, 'diff-tree', '--stdin', '-m', '-r', '--root', *_DIFF, stdin=feed), added, named)
         log = git(repo, 'log', '--stdin', '--no-walk=unsorted', '--no-show-signature',
                   '--format=%h%x00%an <%ae>%x00%cn <%ce>%x00%B%x1e', stdin=feed)
         for rec in log.split('\x1e'):
@@ -316,10 +388,10 @@ def read_push(repo, tips, stop=(), words=None, allow_code=(), tag_refs=(), ref_n
                 continue
             short, author, committer, body = (rec.lstrip('\n').split('\x00', 3) + ['', '', ''])[:4]
             out['commits'] += 1
-            look(f'commit {short} author', author, ('author', author), credentials=False)
-            look(f'commit {short} committer', committer, ('committer', committer), credentials=False)
+            found.look(f'commit {short} author', author, ('author', author), credentials=False)
+            found.look(f'commit {short} committer', committer, ('committer', committer), credentials=False)
             for line in body.split('\n'):
-                look(f'commit {short}', line, ('message', short, line))
+                found.look(f'commit {short}', line, ('message', short, line))
     if shas or tag_refs:
         sent, wanted = set(shas), set(tag_refs)
         fmt = '%(objecttype)%00%(*objectname)%00%(refname)%00%(taggername) %(taggeremail)%00%(contents)%1e'
@@ -328,10 +400,50 @@ def read_push(repo, tips, stop=(), words=None, allow_code=(), tag_refs=(), ref_n
             if kind != 'tag' or (target not in sent and ref not in wanted):
                 continue
             name = ref[len('refs/tags/'):]
-            look(f'tag {name}', name, ('tag name', name))
-            look(f'tag {name} tagger', tagger, ('tagger', tagger), credentials=False)
+            found.look(f'tag {name}', name, ('tag name', name))
+            found.look(f'tag {name} tagger', tagger, ('tagger', tagger), credentials=False)
             for line in body.split('\n'):
-                look(f'tag {name}', line, ('tag', name, line))
+                found.look(f'tag {name}', line, ('tag', name, line))
     for ref in ref_names:
-        look('ref on the remote', ref, ('ref', ref))
-    return out
+        found.look('ref on the remote', ref, ('ref', ref))
+    return dict(out, private=found.private, credentials=found.credentials, code=found.code)
+
+
+# What the next commit adds.
+
+_IDENT_DATE = re.compile(r'\s+\d+\s+[-+]\d{4}$')
+
+
+def read_commit(repo, words=None, staged=True, message=None):
+    """What the next commit adds, read against `words` (a Words, or None when there is no list) and the credential
+    formats. With `staged`: the lines the index adds to HEAD (to nothing, before the first commit), the names of the
+    files it adds or renames, and the author and committer the commit would carry (git var). With `message`: the
+    commit message, every line. A new file that runs code on a host or on install is left to the push.
+
+    -> {lines, files, private: [(where, excerpt)], credentials: [(where, what, excerpt)]}, every text masked.
+    GitError when a git command fails: never a clean reading."""
+    found, out, names = _Reading(words), dict(lines=0, files=0), set()
+
+    def added(sha, path, n, text):
+        out['lines'] += 1
+        found.look(f'{path}:{n}', text, ('line', path, text))
+
+    def named(sha, name):
+        if name not in names:
+            names.add(name)
+            out['files'] += 1
+        found.look_name('new file', name)
+
+    if staged:
+        try:
+            base = git(repo, 'rev-parse', '--verify', '-q', 'HEAD^{commit}').strip()
+        except GitError:                           # no commit yet: what is staged is read against nothing
+            base = git(repo, 'hash-object', '-t', 'tree', '--stdin', stdin='').strip()
+        _walk(git(repo, 'diff-index', '--cached', *_DIFF, base), added, named)
+        for who in ('author', 'committer'):
+            ident = _IDENT_DATE.sub('', git(repo, 'var', f'GIT_{who.upper()}_IDENT').strip())
+            found.look(who, ident, (who, ident), credentials=False)
+    if message is not None:
+        for line in message.split('\n'):
+            found.look('commit message', line, ('message', line))
+    return dict(out, private=found.private, credentials=found.credentials)

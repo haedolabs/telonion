@@ -1,5 +1,5 @@
-"""git's pre-push hook: the checks on every push, what the remote holds asked at push time, and the rewrite rule;
-then the hook's place in a repository."""
+"""git's hooks: the checks on every push, what the remote holds asked at push time, and the rewrite rule; the checks
+on every commit; then the hooks' place in a repository."""
 import os
 import shutil
 import subprocess
@@ -129,6 +129,113 @@ class PrePush(Box):
         self.assertEqual(code, 1, out)
         self.assertIn('could not be read', out)
 
+    def test_an_include_that_is_missing_stops_it_and_its_path_is_not_shown(self):
+        self.words(f'zephyr\ninclude: {os.path.join(self.box, "quokka", "names.txt")}\n')
+        code, out = self.push(self.commit(self.r, {'h.txt': 'fine\n'}), self.base)
+        self.assertEqual(code, 1, out)
+        self.assertIn('~/words.txt line 2: the file it includes is not there', out)
+        self.assertNotIn('quokka', out)
+
+
+class Commit(Box):
+    def setUp(self):
+        super().setUp()
+        self.words('zephyr\n')
+        self.r = self.repo()
+        self.commit(self.r, {'a.txt': 'start\n'}, 'start')
+
+    def pre_commit(self, first=None):
+        code, lines = hook.commit_hook('pre-commit', [], repo=self.r, first=first)
+        return code, '\n'.join(lines)
+
+    def commit_msg(self, text, first=None):
+        path = os.path.join(self.r, '.git', 'COMMIT_EDITMSG')
+        with open(path, 'w') as f:
+            f.write(text)
+        code, lines = hook.commit_hook('commit-msg', [path], repo=self.r, first=first)
+        return code, '\n'.join(lines)
+
+    def test_a_clean_commit_goes(self):
+        self.stage(self.r, {'b.txt': 'fine\n'})
+        code, out = self.pre_commit()
+        self.assertEqual(code, 0, out)
+        self.assertIn('1 added line and 1 new file name read for the commit: nothing private and no credentials', out)
+
+    def test_a_private_word_stops_it_and_is_not_shown(self):
+        self.stage(self.r, {'b.txt': 'the zephyr notes\n', 'zephyr.md': 'x\n'})
+        code, out = self.pre_commit()
+        self.assertEqual(code, 1, out)
+        self.assertIn('private word: b.txt:1: the [private] notes', out)
+        self.assertIn('private word: new file: [private].md', out)
+        self.assertNotIn('zephyr', out)
+
+    def test_a_credential_stops_it_and_is_not_shown(self):
+        self.stage(self.r, {'e.txt': f'{TOKEN}\n'})
+        code, out = self.pre_commit()
+        self.assertEqual(code, 1, out)
+        self.assertIn('a GitHub token: e.txt:1: [credential]', out)
+        self.assertNotIn(TOKEN, out)
+
+    def test_a_new_file_that_runs_code_waits_for_the_push(self):
+        self.stage(self.r, {'.github/workflows/ci.yml': 'on: push\n'})
+        self.assertEqual(self.pre_commit()[0], 0)
+
+    def test_the_message_as_git_keeps_it(self):
+        os.environ['GIT_EDITOR'] = ':'           # git's sign to hooks that no editor runs: every line is kept
+        code, out = self.commit_msg('fine\n# zephyr, kept with no editor\n')
+        self.assertEqual(code, 1, out)
+        self.assertIn('private word: commit message: # [private], kept with no editor', out)
+        del os.environ['GIT_EDITOR']             # an editor: git drops its comment lines, and all below its scissors
+        code, out = self.commit_msg('fine\n# zephyr in a comment\n# ------------------------ >8 ------------------------\n'
+                                    '+zephyr in the diff below\n')
+        self.assertEqual(code, 0, out)
+        self.assertIn('the commit message read: nothing private and no credentials', out)
+        self.assertEqual(self.commit_msg('the zephyr notes\n# a comment\n')[0], 1)
+
+    def test_the_commit_check_turned_off_in_a_repository(self):
+        self.git(self.r, 'config', 'pushgate.checkCommits', 'false')
+        self.stage(self.r, {'b.txt': 'the zephyr notes\n'})
+        code, out = self.pre_commit()
+        self.assertEqual(code, 0, out)
+        self.assertIn('the commit check is off in this repository', out)
+        self.assertEqual(self.commit_msg('zephyr\n')[0], 0)
+
+    def own_hook(self, code):
+        """A hook of the repository's own: it writes its arguments to a log, then exits with `code`."""
+        path, log = os.path.join(self.box, 'own-hook'), os.path.join(self.box, 'own-hook.log')
+        with open(path, 'w') as f:
+            f.write(f'#!/bin/sh\necho "args: $*" >> "{log}"\nexit {code}\n')
+        os.chmod(path, 0o755)
+        return path, log
+
+    def test_the_repositorys_own_check_runs_first(self):
+        own, log = self.own_hook(0)
+        self.stage(self.r, {'b.txt': 'fine\n'})
+        code, out = self.pre_commit(first=own)
+        self.assertEqual(code, 0, out)
+        self.assertIn("this repository's own pre-commit check ran first and passed (pre-commit.chained)", out)
+        code, out = self.commit_msg('fine\n', first=own)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.read(log), f"args: \nargs: {os.path.join(self.r, '.git', 'COMMIT_EDITMSG')}\n")
+        own, _ = self.own_hook(3)
+        self.stage(self.r, {'c.txt': 'the zephyr notes\n'})
+        code, out = self.pre_commit(first=own)
+        self.assertEqual(code, 3, out)
+        self.assertIn('stopped the commit, so Push Gate did not read it', out)
+
+    def test_a_list_that_cannot_be_read_stops_it(self):
+        os.remove(self.words_file)
+        os.makedirs(self.words_file)
+        self.stage(self.r, {'b.txt': 'fine\n'})
+        code, out = self.pre_commit()
+        self.assertEqual(code, 1, out)
+        self.assertIn('could not be read', out)
+
+    def test_a_message_that_cannot_be_read_stops_it(self):
+        code, lines = hook.commit_hook('commit-msg', [os.path.join(self.box, 'no-such-file')], repo=self.r)
+        self.assertEqual(code, 1, lines)
+        self.assertEqual(hook.commit_hook('commit-msg', [], repo=self.r)[0], 1, 'no message file named')
+
 
 class Install(Box):
     def test_the_hook_on_real_pushes(self):
@@ -153,6 +260,45 @@ class Install(Box):
         p = subprocess.run(['git', '-C', r, 'push', '-q', 'origin', 'main'], capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn('Push Gate: 1 commit', p.stderr)
+
+    def test_the_hooks_on_real_commits(self):
+        self.words('zephyr\n')
+        r = self.repo()
+        self.commit(r, {'a.txt': 'start\n'})
+        done, words = hook.install(r)
+        self.assertTrue(done and 'pre-push, pre-commit, and commit-msg hooks written' in words, words)
+        for name in hook.HOOKS:
+            path = os.path.join(r, '.git', 'hooks', name)
+            self.assertTrue(os.access(path, os.X_OK) and hook.mark(name) in self.read(path), name)
+        start = self.head(r)
+
+        def commit(*args):
+            return subprocess.run(['git', '-C', r, 'commit', '-q', *args], capture_output=True, text=True)
+
+        self.stage(r, {'b.txt': 'the zephyr notes\n'})
+        p = commit('-m', 'notes')
+        self.assertNotEqual(p.returncode, 0, p.stderr)
+        self.assertIn('Push Gate: the commit is stopped', p.stderr)
+        self.assertNotIn('zephyr', p.stderr)
+        self.assertEqual(self.head(r), start, 'the commit was made')
+        with open(os.path.join(r, 'a.txt'), 'a') as f:
+            f.write('fine\n')
+        p = commit('-m', 'only a.txt', 'a.txt')    # git builds an index of its own: the staged b.txt is not in it
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn('Push Gate: 1 added line and 0 new file names read for the commit', p.stderr)
+        self.assertIn('Push Gate: the commit message read', p.stderr)
+        self.git(r, 'rm', '-q', '-f', 'b.txt')
+        with open(os.path.join(r, 'a.txt'), 'a') as f:
+            f.write('zephyr, not staged\n')
+        p = commit('-a', '-m', 'all')              # -a stages it: it is read
+        self.assertNotEqual(p.returncode, 0, p.stderr)
+        self.assertIn('private word: a.txt:3', p.stderr)
+        self.git(r, 'checkout', '--', 'a.txt')
+        self.stage(r, {'c.txt': 'fine\n'})
+        p = commit('-m', 'zephyr in the message')
+        self.assertNotEqual(p.returncode, 0, p.stderr)
+        self.assertIn('private word: commit message: [private] in the message', p.stderr)
+        self.assertEqual(commit('-m', 'fine').returncode, 0)
 
     def write(self, path, text):
         with open(path, 'w') as f:
@@ -197,6 +343,28 @@ class Install(Box):
         self.assertFalse(os.path.lexists(chained))
         self.assertIn('refused by its own check', self.read(path))
 
+    def test_the_repositorys_own_commit_hooks_are_kept_and_run_first(self):
+        self.words('zephyr\n')
+        r = self.repo()
+        self.commit(r, {'a.txt': 'start\n'})
+        hooks, log = os.path.join(r, '.git', 'hooks'), os.path.join(self.box, 'own.log')
+        self.write(os.path.join(hooks, 'pre-commit'), f'#!/bin/sh\necho pre-commit >> "{log}"\n')
+        own_msg = f'#!/bin/sh\necho "commit-msg: $(head -n 1 "$1")" >> "{log}"\necho "Seen-by: zephyr" >> "$1"\n'
+        self.write(os.path.join(hooks, 'commit-msg'), own_msg)
+        done, words = hook.install(r)
+        self.assertTrue(done, words)
+        self.assertIn("this repository's own pre-commit and commit-msg hooks run first", words)
+        self.assertEqual(self.read(os.path.join(hooks, 'commit-msg.chained')), own_msg)
+        self.stage(r, {'b.txt': 'fine\n'})
+        p = subprocess.run(['git', '-C', r, 'commit', '-q', '-m', 'fine'], capture_output=True, text=True)
+        self.assertNotEqual(p.returncode, 0, 'the line its own hook added to the message was not read')
+        self.assertIn('private word: commit message: Seen-by: [private]', p.stderr)
+        self.assertEqual(self.read(log), 'pre-commit\ncommit-msg: fine\n')
+        done, words = hook.uninstall(r)
+        self.assertTrue(done and 'put back' in words, words)
+        self.assertEqual(self.read(os.path.join(hooks, 'commit-msg')), own_msg)
+        self.assertEqual(sorted(n for n in os.listdir(hooks) if not n.endswith('.sample')), ['commit-msg', 'pre-commit'])
+
     def test_the_tool_that_wrote_the_hook_writes_it_again(self):
         r = self.repo()
         path, chained = (os.path.join(r, '.git', 'hooks', name) for name in ('pre-push', hook.CHAINED))
@@ -223,7 +391,9 @@ class Install(Box):
         made, cloned = os.path.join(self.box, 'made'), os.path.join(self.box, 'cloned')
         subprocess.run(['git', 'init', '-q', made], check=True)
         subprocess.run(['git', 'clone', '-q', made, cloned], check=True, capture_output=True)
-        self.assertEqual((hook.state(made)['hook'], hook.state(cloned)['hook']), ('in place', 'in place'))
+        for repo in (made, cloned):
+            self.assertEqual({n: h['hook'] for n, h in hook.state(repo)['hooks'].items()},
+                             {n: 'in place' for n in hook.HOOKS})
         self.assertTrue(hook.template_on()[0], 'a second time changes nothing')
         done, words = hook.template_off()
         self.assertTrue(done, words)
@@ -249,7 +419,7 @@ class Install(Box):
         done, words = hook.install(r)
         self.assertFalse(done)
         self.assertIn('core.hooksPath', words)
-        self.assertFalse(os.path.exists(os.path.join(shared, 'pre-push')))
+        self.assertFalse(os.path.exists(shared))
 
     def test_not_a_repository(self):
         self.assertEqual(hook.state(self.box)['hook'], 'not a repository')

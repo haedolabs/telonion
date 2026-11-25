@@ -179,7 +179,7 @@ def _template_line():
 
 
 def cmd_template(a):
-    done, words = template_off() if a.off else template_on()
+    done, words = template_off() if a.off else template_on(update=a.update)
     print(words)
     return 0 if done else 1
 
@@ -284,6 +284,8 @@ def main(argv):
     s.set_defaults(run=cmd_status)
     t = sub.add_parser('template', help="the hooks in git's template, for every repository made or cloned from now on")
     t.add_argument('--off', action='store_true', help="take them out of git's template again")
+    t.add_argument('--update', action='store_true', help='the pre-push hook in place, and the commit hooks brought up '
+                                                         "to date only where the template has them")
     t.set_defaults(run=cmd_template)
     w = sub.add_parser('words', help="where the word lists are (the main one and the repository's own), and how many "
                                      "lines each holds, with the files it includes")

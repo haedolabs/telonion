@@ -144,11 +144,16 @@ class OldName(Box):
                 f.write(old_body(n))
         self.git(self.box, 'config', '--global', 'init.templateDir', old)
         self.assertEqual(hook.template_state()['hooks'], {n: 'out of date' for n in hook.HOOKS})
+        os.remove(os.path.join(old, 'hooks', 'commit-msg'))
+        self.assertTrue(hook.template_on(update=True)[0])
+        self.assertFalse(os.path.exists(old), 'the old template folder was not moved')
+        self.assertEqual(hook.template_state()['hooks'],
+                         {'pre-push': 'in place', 'pre-commit': 'in place', 'commit-msg': 'none'},
+                         'an update added a commit check')
         done, words = hook.template_on()
         self.assertTrue(done, words)
         self.assertEqual(self.git(self.box, 'config', '--global', '--get', 'init.templateDir').strip(),
                          hook.own_template())
-        self.assertFalse(os.path.exists(old))
         self.assertEqual(hook.template_state()['hooks'], {n: 'in place' for n in hook.HOOKS})
         made = os.path.join(self.box, 'made')
         subprocess.run(['git', 'init', '-q', made], check=True)

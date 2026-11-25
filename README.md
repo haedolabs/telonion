@@ -74,7 +74,7 @@ bin/telonion status ~/code/*         # which repositories have the hooks
 
 A repository that holds private words on purpose, and is never made public, can turn the commit check off: `git config telonion.checkCommits false`. Its pushes are still read.
 
-`telonion template` puts the hooks in git's template, so every repository made with `git init` or `git clone` from then on has them. When git has no template folder set, Telonion makes its own from git's default template (`~/.config/telonion/template`) and sets `init.templateDir`. `telonion template --off` takes the hooks out again.
+`telonion template` puts the hooks in git's template, so every repository made with `git init` or `git clone` from then on has them. When git has no template folder set, Telonion makes its own from git's default template (`~/.config/telonion/template`) and sets `init.templateDir`. `telonion template --off` takes the hooks out again. `telonion template --update` brings the hooks there up to date and adds no commit check.
 
 ## The old name
 
@@ -83,7 +83,7 @@ Telonion was called Push Gate until version 0.4.0. Nothing it set up under that 
 - `pushgate` still runs Telonion, so every hook Push Gate wrote still reads every push and commit.
 - A hook Push Gate wrote counts as Telonion's, out of date, never as another tool's: `telonion install` replaces it, and keeps a repository's own hook chained beside it.
 - The old settings (`pushgate.words`, `pushgate.allowCode`, `pushgate.allowRewrite`, `pushgate.checkCommits`), variables (`$PUSHGATE_WORDS`, `PUSHGATE_ALLOW_REWRITE`), and files (`~/.config/pushgate/words.txt`, `.git/info/pushgate-words`) are read wherever the new ones are not set.
-- `telonion install` (or `telonion install --update`, which adds no commit check) moves a repository over: its hooks, its own word list (renamed, never read aloud), and its own `pushgate.*` settings, when it has no `telonion.*` ones yet. `telonion template` moves the template folder Push Gate made to `~/.config/telonion/template`. `telonion status` names a repository that still keeps the old names.
+- `telonion install` (or `telonion install --update`, which adds no commit check) moves a repository over: its hooks, its own word list (renamed, never read aloud), and its own `pushgate.*` settings, when it has no `telonion.*` ones yet. `telonion template` (or `telonion template --update`) moves the template folder Push Gate made to `~/.config/telonion/template`. `telonion status` names a repository that still keeps the old names.
 
 ## What it does not do
 

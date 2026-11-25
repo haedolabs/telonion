@@ -477,10 +477,12 @@ def template_state():
     return dict(dir=d, hook=hooks['pre-push'], hooks=hooks)
 
 
-def template_on():
+def template_on(update=False):
     """Telonion's hooks in git's template, so `git init` and `git clone` give them to every repository from now on.
     When git has no template folder set, Telonion makes its own from git's default template and sets
-    init.templateDir. Nothing is written when another tool's hook of one of those names is there. -> (done, words)."""
+    init.templateDir. Nothing is written when another tool's hook of one of those names is there. With `update`, the
+    pre-push hook is put in place and the commit hooks only where Telonion's (or Push Gate's) already are.
+    -> (done, words)."""
     t = template_state()
     other = [n for n, k in t['hooks'].items() if k == "another tool's"]
     if other:
@@ -508,7 +510,7 @@ def template_on():
         if r.returncode:
             return False, f'could not set init.templateDir: {r.stderr.strip()}'
     for n, k in t['hooks'].items():
-        if k != 'in place':
+        if k != 'in place' and not (update and n != 'pre-push' and k != 'out of date'):
             _write_hook(os.path.join(d, 'hooks', n), n)
     return True, (f"repositories made or cloned from now on get the hooks from git's template ({short_path(d)})"
                   + (f' (moved from {short_path(old_template())})' if moved else ''))

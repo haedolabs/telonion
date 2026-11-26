@@ -1,6 +1,6 @@
 # Telonion
 
-By Haedo Labs. Telonion reads what a git push would make public (every commit the remote does not hold, each on its own) and stops the push when that holds a word from a private list or a credential. Before each commit, it reads what the commit adds the same way. The overview is `README.md`.
+By Haedo Labs. Telonion reads what a git push would make public (every commit the remote does not hold, each on its own) and stops the push when that holds a word from a private list or a credential. Before each commit, it reads what the commit adds the same way. The overview is `README.md`; the full reference, `docs/reference.md`.
 
 ## Layout
 
@@ -20,7 +20,7 @@ By Haedo Labs. Telonion reads what a git push would make public (every commit th
 - Every rule gets a test first, on made-up words in made-up repositories. Tests build credentials at run time, so no file here holds one.
 - Commit only this repository's files. Nothing personal, no other project's name, no machine's paths, and no narration in anything committed. Notes for one machine go in a `*.local.md` file beside this one, which git ignores; read it when it is there.
 - Output is plain words with precise terms (commit, ref, remote, hook): one short summary for each run.
-- When a command, default, or rule changes, update every document that states it: `README.md`, this file, and the command's help.
+- When a command, default, or rule changes, update every document that states it: `README.md`, `docs/reference.md`, this file, and the command's help.
 
 ## Run the tests
 

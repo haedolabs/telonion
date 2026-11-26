@@ -1,6 +1,6 @@
-# <img src="docs/icon.png" alt="" width="32" height="32"> Telonion
+# <img src="docs/icon.png" alt="" width="32" height="32"> Telonion™
 
-By [Haedo Labs](https://haedolabs.com).
+By [Haedo Labs](https://haedolabs.com)™.
 
 A git hook that stops a push, or a commit, holding a word from your private list or a credential. It runs on your own computer and sends nothing anywhere.
 

@@ -86,7 +86,9 @@ Telonion: the push to release is stopped
   1 file version checked by name only
 ```
 
-`check --live --receipt` saves the preview decision. `TELONION_RECEIPT=1 git push` saves the hook decision. Each writes a separate JSON file (mode `0600`) in the common Git directory's `info/telonion-receipts/`. It records the time, source, masked remote label, policy, decision, reason categories, and counts. It contains no excerpts, file names, URLs, or list values. A receipt describes Telonion's local decision, not delivery. No receipt is kept by default.
+`telonion check --live --receipt` saves the decision for one preview. Setting `TELONION_RECEIPT=1` saves receipts for both `telonion check --live` and `git push`. Directory checks require the `--receipt` flag to save a receipt.
+
+Each Git receipt is a separate JSON file (mode `0600`) in the common Git directory's `info/telonion-receipts/`. It records the time, source, masked remote label, policy, decision, reason categories, and counts. It contains no excerpts, file names, URLs, or list values. A receipt describes Telonion's local decision, not delivery. No receipt is kept by default.
 
 ## What stops a push
 
@@ -145,7 +147,8 @@ Telonion was called Push Gate until version 0.4.0. Nothing it set up under that 
 
 ## What it does not do
 
-- It reads added text, not text rendered inside documents or media. Git-classified binary changes and common document, archive, and media formats are reported as name-only. An LFS pointer is not its payload. A submodule entry identifies another repository; each repository needs its own inspection. The live preview does not recurse into submodules.
+- It reads added text, not text rendered inside documents or media. Git-classified binary changes and common document, archive, and media formats are reported as name-only. An LFS pointer is not its payload.
+- A submodule pointer names a commit in another repository, which needs its own inspection. The live preview does not recurse into submodules. A release push that adds or updates a submodule pointer is held; `telonion approve` cannot clear it.
 - A hook guards against accidents, not intent: `git push --no-verify` and `git commit --no-verify` skip it.
 - The commit check runs when `git commit` makes a commit; when `git merge` makes one, only its message is read. A commit that another command makes, such as `git rebase`, `git cherry-pick`, or `git am`, may not be read until the push, which reads every commit.
 - It finds a credential by its fixed format. A password with no format of its own is found only on a line that gives it to a name like `password`.

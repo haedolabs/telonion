@@ -1,6 +1,6 @@
 # <img src="docs/icon.png" alt="" width="32" height="32"> Telonion™
 
-By [Haedo Labs](https://haedolabs.com)™.
+[By Haedo Labs™.](https://haedolabs.com)
 
 A local check for Git pushes and directories prepared for publishing. It reads what would be sent, checks for private words and credentials, and verifies the required destination and file approvals.
 
@@ -12,9 +12,9 @@ A telonion was a customs post where goods were checked before they passed.
 - **Stops private words.** Regular expressions from a list kept outside every repository, with `allow:` lines for text that may pass, and a repository's own list in `.git/info/telonion-words`.
 - **Stops credentials.** Tokens and keys in their fixed formats, private key blocks, key files by name (`.env`, `*.pem`), and long literals given to names like `password`.
 - **Stops risky pushes.** New files that run code on a host or on install, and pushes that rewrite or delete a remote branch, each allowed per repository.
-- **Masks every hit.** Each names its commit and place, with the match shown as `[private]` or `[credential]`, so logs and AI transcripts never repeat it.
+- **Masks findings.** Reported locations and excerpts mask private words and credentials as `[private]` or `[credential]`.
 - **Checks destinations.** An approval binds a remote name to its push URL. A release destination also requires approval for each file version checked by name only.
-- **Reports the decision.** The terminal shows the counts and any masked findings. Saving a receipt is optional. Existing repository hooks are kept.
+- **Reports the decision.** The terminal shows counts and masked findings. Set `TELONION_RECEIPT=1` to save receipts for Git pushes and live previews. Existing repository hooks are kept.
 
 ## Install
 
@@ -44,7 +44,7 @@ telonion approve release docs/guide.pdf    # this file at HEAD, for release alon
 telonion check --live --remote release --receipt main
 ```
 
-A selected word list must be readable. Content checks run locally. Git contacts the destination for the live preview. Separate Git LFS transfers are held in repositories with destination rules.
+A selected word list must be readable. Content checks run locally. Git contacts the destination for the live preview. Repositories with destination rules hold separate Git LFS transfers. Release destinations also hold pushes that add or update a submodule pointer.
 
 For a direct Cloudflare Pages upload, use the actual account ID, project, environment, and branch from the publisher. The source repository needs no remote:
 
@@ -55,7 +55,7 @@ telonion approve -C "$repo" --directory "$stage" --destination "$target" -- asse
 telonion check -C "$repo" --directory "$stage" --destination "$target" --json
 ```
 
-The result identifies the directory by digest: exit `0` passed, `1` held, or `2` incomplete. The publisher keeps the stage immutable from inspection through upload.
+Passed (exit `0`) and held (exit `1`) results include a tree digest. An incomplete check (exit `2`) returns `null` for `tree_digest`. The publisher keeps the stage immutable from inspection through upload.
 
 ## Reference
 
@@ -69,4 +69,4 @@ python3 -m unittest discover -s tests
 
 ## License
 
-MIT, © 2026 [Haedo Labs](https://haedolabs.com); see [LICENSE](LICENSE).
+MIT, © 2026 [Haedo Labs™](https://haedolabs.com); see [LICENSE](LICENSE).

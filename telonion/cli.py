@@ -388,11 +388,13 @@ def main(argv):
                                                            'as the pre-commit hook does')
     how.add_argument('--directory', metavar='DIR', help='inspect this exact prepared directory, relative to the caller')
     c.add_argument('--destination', metavar='TARGET', help='with --directory: the publish target from the upload settings')
-    c.add_argument('--json', action='store_true', help='with --directory: one private JSON result; exit 0 passed, 1 held, 2 incomplete')
+    c.add_argument('--json', action='store_true', help='with --directory: one JSON result; exit 0 passed or 1 held '
+                                                       '(with a tree digest), 2 incomplete (null digest)')
     said = c.add_mutually_exclusive_group()
     said.add_argument('-m', dest='message', metavar='MESSAGE', help='with --staged: a commit message to read too')
     said.add_argument('-F', dest='file', metavar='FILE', help='with --staged: a commit message to read too, from a file')
-    c.add_argument('--receipt', action='store_true', help='save the live or directory decision in Git’s info/telonion-receipts/')
+    c.add_argument('--receipt', action='store_true', help='save the live or directory decision in Git’s info/telonion-receipts/; '
+                                                          'TELONION_RECEIPT=1 also saves receipts for live previews and Git pushes')
     c.add_argument('--follow-tags', action='store_true', help='include the tags Git would send with --follow-tags')
     c.add_argument('refs', nargs='*', metavar='REF', help='one tip for an offline estimate, or Git refspecs with --live')
     c.set_defaults(run=cmd_check)
@@ -402,7 +404,8 @@ def main(argv):
     d.add_argument('--publish', metavar='TARGET', help='cloudflare-pages/ACCOUNT/PROJECT/production/BRANCH '
                                                        '(or preview/BRANCH); independent of Git remotes')
     mode = d.add_mutually_exclusive_group()
-    mode.add_argument('--release', action='store_true', help='require approval for each name-only file version')
+    mode.add_argument('--release', action='store_true', help='require approval for each name-only file version; '
+                                                            'hold new or updated submodule pointers')
     mode.add_argument('--remove', action='store_true', help='withdraw this approval; unknown destinations remain held')
     d.set_defaults(run=cmd_destination)
     f = sub.add_parser('approve', help='approve one committed Git file or the exact bytes of a binary publish file')

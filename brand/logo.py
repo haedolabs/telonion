@@ -2,7 +2,7 @@
 """logo.py - the Telonion logo, drawn from its measures into brand/ and docs/.
 
 The toll house at the city gate, made a keep: an off-white wall with three merlons on top, closed by its floor, and
-inside it a sapphire dot, the push, held to be read before it passes; on near-black. The Haedo Labs product family's
+inside it a sapphire dot, the push, held to be read before it passes; on near-black. The Haedo Labs™ product family's
 measures: a square of 64, the dot's radius 15.6, lines 3.25 wide with round ends and joins, inside 6..58. The crenels'
 edges stand in line with the dot's (16.4 and 47.6), and the dot is centred inside the keep, the same black above and
 below it (5.525), so its centre is at y 35.25 and not the family's 32.

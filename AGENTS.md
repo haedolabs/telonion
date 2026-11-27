@@ -1,6 +1,6 @@
 # Telonion
 
-By Haedo Labs™. Use that spelling for the maker in all public text. Telonion checks Git pushes, staged changes, commit messages, and prepared publish directories. It checks private words, credentials, and destination and file approvals. The overview is `README.md`; the full reference, `docs/reference.md`.
+[By Haedo Labs™.](https://haedolabs.com/) Use that spelling for the maker in all public text. Telonion checks Git pushes, staged changes, commit messages, and prepared publish directories. It checks private words, credentials, and destination and file approvals. The overview is `README.md`; the full reference, `docs/reference.md`.
 
 ## Layout
 

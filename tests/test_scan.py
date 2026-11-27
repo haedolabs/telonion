@@ -133,6 +133,7 @@ class OwnList(Box):
         self.git(a, 'worktree', 'add', '-q', wt, '-b', 'side')
         self.assertEqual(own_words_path(wt), own, 'a worktree has a list of its own')
         os.remove(self.words_file)
+        del os.environ['TELONION_WORDS']            # no main list was selected
         self.assertEqual(read_words(a).paths, [own], 'with no main list, the repository list alone')
         self.assertIsNone(read_words(b))
         self.assertIsNone(own_words_path(os.path.join(self.box, 'no-such-folder')))

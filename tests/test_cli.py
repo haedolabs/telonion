@@ -13,7 +13,7 @@ class Command(Box):
         return subprocess.run([sys.executable, BIN, *args], capture_output=True, text=True, cwd=self.box)
 
     def test_the_word_list_is_counted_never_shown(self):
-        self.assertIn('word list: none at', self.run_command('words').stdout)
+        self.assertIn('configured word list is missing', self.run_command('words').stdout)
         p = self.run_command('words', '--init')
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(os.stat(self.words_file).st_mode & 0o777, 0o600)
@@ -39,6 +39,7 @@ class Command(Box):
         self.assertEqual(self.run_command('check', '-C', self.box).returncode, 2, 'not a repository')
 
     def test_a_repositorys_own_list(self):
+        del os.environ['TELONION_WORDS']             # only the repository's list is selected
         r = self.repo()
         p = self.run_command('words', '--init', '--here', '-C', r)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
@@ -132,7 +133,7 @@ class Command(Box):
         for args, code in ((['words'], 0), (['status', r], 0), (['check', '-C', r], 2), (['check', '--staged', '-C', r], 2)):
             p = self.run_command(*args)
             self.assertEqual(p.returncode, code, args)
-            self.assertIn('~/words.txt line 2: the file it includes is not there', p.stdout, args)
+            self.assertIn('main word list line 2: the file it includes is not there', p.stdout, args)
             self.assertNotIn('quokka', p.stdout, args)
 
 

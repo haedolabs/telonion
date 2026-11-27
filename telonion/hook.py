@@ -1,26 +1,20 @@
-"""git's hooks: Telonion's pre-push, pre-commit, and commit-msg hooks, their place in a repository, and in git's
-template for the repositories made after it.
-
-Each hook runs the repository's own hook of the same name first, when it has one (kept beside Telonion's as
-<name>.chained). The pre-push hook then reads what the push sends (scan.read_push) against what the remote holds now,
-asked at push time. It stops the push for a private word, a credential, or a new file that runs code, and it refuses a
-push that rewrites or deletes a branch on the remote, or lands on a remote commit this checkout has never seen. The
-pre-commit and commit-msg hooks read what the next commit adds (scan.read_commit), and stop the commit for a private
-word or a credential.
-"""
+"""Git's push and commit hooks, their installation, and the shared decision used by a live push preview.
+Ordinary repository checks run first. Destination rules and transfer hooks require inspection first."""
 import os
 import shlex
 import shutil
 import subprocess
 import sys
 
-from . import NAME, count, listed, short_path
-from .scan import (OLD, GitError, ZERO, advertised, cleaner, config, env, own_words_path, present, read_commit,
-                   read_push, read_words, setting, words_path)
+from . import NAME, count, fingerprint, listed, short_path
+from .destinations import destinations, endpoint, label, named_endpoint
+from .receipts import inspection_record, save_receipt
+from .scan import (OBJECT_ID, OLD, GitError, ListError, advertised, cleaner, config, env, own_words_path, present,
+                   read_commit, read_push, read_words, setting, words_path)
 
 HOOKS = ('pre-push', 'pre-commit', 'commit-msg')
 MARK = 'Telonion pre-push hook'
-CHAINED = 'pre-push.chained'                       # a repository's own pre-push hook, kept beside Telonion's, run first
+CHAINED = 'pre-push.chained'                       # a repository's own pre-push hook, kept beside Telonion's
 LAUNCHER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'bin', 'telonion')
 PY = shutil.which('python3') or sys.executable or '/usr/bin/python3'   # the PATH's python3, a stable link, not a
                                                                        # versioned path that an upgrade removes
@@ -43,7 +37,7 @@ def _ancestor(repo, older, newer):
     r = subprocess.run(['git', '-C', repo, 'merge-base', '--is-ancestor', older, newer], capture_output=True,
                        stdin=subprocess.DEVNULL)
     if r.returncode not in (0, 1):
-        raise GitError(f'git merge-base: {r.stderr.decode(errors="replace").strip()[:300]}')
+        raise GitError('git could not compare the two commits')
     return r.returncode == 0
 
 
@@ -56,23 +50,24 @@ def run_first(path, argv, stdin=None):
     path = os.path.abspath(path)
     try:
         return subprocess.run([path, *argv], input=stdin, text=True).returncode
-    except OSError as e:
-        print(f'{NAME}: could not run {short_path(path)}: {e}', file=sys.stderr)
+    except OSError:
+        print(f"{NAME}: could not run the repository's hook", file=sys.stderr)
         return 1
 
 
 def _lists(repo):
     """The word lists `repo` is read against, as one: (words, stops, notes). Words is None when there is no list,
     or when a list exists and cannot be read, which is a stop."""
-    path = words_path(repo)
     try:
         words = read_words(repo)
-    except OSError as e:
-        return None, [('error', f'a word list could not be read ({e})')], []
+    except ListError as e:
+        return None, [('error', str(e))], []
+    except OSError:
+        return None, [('error', 'a word list could not be read')], []
     if words is None:
-        return None, [], [f'no private word list at {short_path(path)}: credentials were checked, private words were not']
-    if path not in words.paths:
-        return words, [], [f"no word list at {short_path(path)}: only this repository's own list was read"]
+        return None, [], ['no private word list: credentials were checked, private words were not']
+    if words_path(repo) not in words.paths:
+        return words, [], ["only this repository's own word list was read"]
     return words, [], []
 
 
@@ -95,66 +90,90 @@ def _allow(repo):
             + (f", or, for this repository alone, in its own ({short_path(own)})." if own else '.'))
 
 
-def prepush(argv, refs, repo=None, first=None):
-    """git's pre-push hook. git passes the remote's name and URL as arguments, and one line a ref on stdin:
-    <local ref> <local object> <remote ref> <remote object>. `first` is the repository's own pre-push hook, run before
-    anything is read; when it stops the push, nothing is read. -> (code, lines): 0 lets the push go."""
-    own = run_first(first, argv, refs)
-    if own:
-        return own, [f"{NAME}: this repository's own pre-push check ({CHAINED}) stopped the push, so {NAME} did not read it"]
-    remote = argv[0] if argv else 'origin'
-    url = argv[1] if len(argv) > 1 and argv[1] else remote
-    repo = repo or os.getcwd()
-    rewrite_ok = env('ALLOW_REWRITE') == '1' or 'true' in setting(repo, 'allowRewrite', '--type=bool')
-    stops = []                                     # (kind, words)
-    notes = [f"this repository's own pre-push check ran first and passed ({CHAINED})"] if own == 0 else []
-    tips, stop, tag_refs, names = [], [], [], []
+def _read_updates(repo, refs, remote, url, words, stops, notes):
+    """The exact updates Git supplied. A failed remote listing broadens the scan to the full history."""
+    rewrite_ok = env('ALLOW_REWRITE') == '1' or setting(repo, 'allowRewrite', '--type=bool')[-1:] == ['true']
+    tips, stop, names = [], [], []
     for line in refs.split('\n'):
-        f = line.split()
-        if len(f) != 4:
+        if not line:
             continue
-        lref, lsha, rref, rsha = f
-        if lsha == ZERO:                           # a deletion sends nothing, but it changes the remote
+        f = line.split()
+        if len(f) != 4 or not OBJECT_ID.fullmatch(f[1]) or not OBJECT_ID.fullmatch(f[3]) or len(f[1]) != len(f[3]):
+            raise GitError('a proposed ref update could not be read')
+        _, lsha, rref, rsha = f
+        zero = '0' * len(lsha)
+        if lsha == zero:
             if rref.startswith('refs/heads/') and not rewrite_ok:
                 stops.append(('rewrite', f'the push deletes {rref} on {remote}'))
             continue
-        try:
-            if rsha != ZERO:
-                stop.append(rsha)
-                if not rewrite_ok and not present(repo, [rsha]):
-                    stops.append(('rewrite', f'{remote} holds {rsha[:7]} on {rref}, which this checkout does not have: '
-                                             f'fetch and look at it first'))
-                elif not rewrite_ok and rref.startswith('refs/heads/') and not _ancestor(repo, rsha, lsha):
-                    stops.append(('rewrite', f'the push rewrites {rref} on {remote} (a force push)'))
-        except GitError as e:
-            stops.append(('error', f'could not compare {rref} with {remote}: {e}'))
+        if rsha != zero:
+            stop.append(rsha)
+            if not rewrite_ok and not present(repo, [rsha]):
+                stops.append(('rewrite', f'{remote} holds {rsha[:7]} on {rref}, which this checkout does not have: '
+                                         f'fetch and look at it first'))
+            elif not rewrite_ok and rref.startswith('refs/heads/') and not _ancestor(repo, rsha, lsha):
+                stops.append(('rewrite', f'the push rewrites {rref} on {remote} (a force push)'))
         tips.append(lsha)
         names.append(rref)
-        if lref.startswith('refs/tags/'):
-            tag_refs.append(lref)
-    words, errors, more = _lists(repo)
-    stops += errors
-    notes += more
-    clean = cleaner(words)
-    r = None
     if tips:
         try:
             stop += advertised(repo, url)
-        except GitError as e:
-            notes.append(f'could not list what {remote} holds ({e}), so more history was read than usual')
-        try:
-            r = read_push(repo, tips, stop, words, setting(repo, 'allowCode', both=True), tag_refs, names)
-        except GitError as e:
-            stops.append(('error', f'could not read what the push sends: {e}'))
-    if r:
-        stops += _hits(r)
-    if not stops:
-        read = (f"{count(r['commits'], 'commit')}, {count(r['lines'], 'added line')}, and "
-                f"{count(r['files'], 'new file name')}") if r else 'nothing new'
-        found = 'nothing private and no credentials' if words is not None else 'no credentials'
-        return 0, [f'{NAME}: {read} read for {remote}: {found}'] + [f'  {n}' for n in notes]
+        except GitError:
+            stop = []
+            notes.append('could not list the remote refs; the full outgoing history was read')
+    reading = read_push(repo, tips, stop, words, setting(repo, 'allowCode', both=True), tag_refs=(), ref_names=names)
+    reading['ref_updates'] = len(refs.splitlines())
+    return reading
+
+
+def _check_files(repo, r, name, key, mode, stops, notes):
+    opaque = r['opaque']
+    if not opaque:
+        return
+    notes.append(f"{count(len(opaque), 'file version')} checked by name only")
+    approvals = set(config(repo, 'telonion.approvedFile', '--local')) if mode == 'release' else set()
+    approved = 0
+    for path, version, sha, kind in opaque:
+        if kind == 'LFS' and mode:
+            stops.append(('LFS', f'{sha[:7]} {path}: the separate LFS transfer has not been inspected'))
+        elif mode == 'release':
+            if kind == 'submodule':
+                stops.append(('file', f'{sha[:7]} {path}: the submodule contents are outside this inspection'))
+            elif fingerprint(name, key, version) in approvals:
+                approved += 1
+            else:
+                stops.append(('file', f'{sha[:7]} {path}: this version has no approval for release'))
+    r['approved_files'] = approved
+    if approved:
+        notes.append(f"{count(approved, 'file version')} approved for this release destination")
+    if not mode and any(kind == 'LFS' for _, _, _, kind in opaque):
+        notes.append('LFS pointer text read; the separate LFS payload was not inspected')
+
+
+def transfer_hook(repo, path):
+    """Recognize the standard LFS uploader or one marked with telonion.transferHook."""
+    if not path or not os.path.isfile(path) or not os.access(path, os.X_OK):
+        return False
+    if config(repo, 'telonion.transferHook', '--type=bool')[-1:] == ['true']:
+        return True
+    with open(path, 'rb') as f:
+        body = f.read(65536)
+    return b'git lfs pre-push' in body or b'git-lfs pre-push' in body
+
+
+def _push_lines(repo, remote, r, words, stops, notes):
     kinds = {k for k, _ in stops}
-    lines = [f'{NAME}: the push to {remote} is stopped'] + [f'  {clean(w)}' for _, w in stops]
+    read = (f"{count(r['commits'], 'commit')}, {count(r['lines'], 'added line')}, and "
+            f"{count(r['files'], 'new file name')}") if r is not None else None
+    if not stops:
+        found = 'no private-word or credential matches' if words is not None else 'no credential matches'
+        return [f'{NAME}: {read or "nothing new"} read for {remote}: {found}', *('  ' + n for n in notes)]
+    lines = [f'{NAME}: the push to {remote} is stopped']
+    if read:
+        lines.append(f'  {read} read')
+    lines += [f'  {w}' for _, w in stops[:LIMIT * 3]]
+    if len(stops) > LIMIT * 3:
+        lines.append(f'  ... and {len(stops) - LIMIT * 3} more')
     if kinds & {'private', 'credential', 'code'}:
         lines.append('  A hit stays in the commit that added it, and a later commit does not remove it: amend, squash, '
                      'or rebase that commit before it leaves.')
@@ -166,7 +185,73 @@ def prepush(argv, refs, repo=None, first=None):
         lines.append('  A file meant to run code: git config --add telonion.allowCode <path or pattern>')
     if 'rewrite' in kinds:
         lines.append('  A rewrite or a deletion on purpose: TELONION_ALLOW_REWRITE=1 for one push.')
-    return 1, lines + [f'  {n}' for n in notes]
+    return lines + [f'  {n}' for n in notes]
+
+
+def inspect_push(argv, refs, repo, first=None, preview=False):
+    """One decision for the negotiated push, whether called by Git or its dry-run preview."""
+    remote, words, r, policy = 'the destination', None, None, 'unread'
+    stops, notes, code = [], [], 0
+    try:
+        rules = destinations(repo)
+        policy = 'unapproved' if rules else 'default'
+        transfer = transfer_hook(repo, first)
+        deferred = bool(rules) or transfer
+        if not preview and not deferred:
+            own = run_first(first, argv, refs)
+            if own:
+                code = own
+                stops.append(('hook', f"this repository's own pre-push check ({CHAINED}) stopped the push, "
+                                      f'so {NAME} did not read it'))
+            elif own == 0:
+                notes.append(f"this repository's own pre-push check ran first and passed ({CHAINED})")
+        if not stops:
+            words, stops, more = _lists(repo)
+        if not stops:
+            if len(argv) != 2:
+                raise GitError('Git did not identify the push destination')
+            name, url = argv
+            remote = label(name) if name != url else 'the destination'
+            key = endpoint(repo, url)
+            mode, bound = rules.get(name, (None, None))
+            if rules and (mode in (None, 'removed') or bound != key or named_endpoint(repo, name) != key):
+                stops.append(('destination', 'the destination is not approved; review its push URL'))
+            else:
+                if mode:
+                    policy = mode
+                    notes.append(f'approved destination ({mode})')
+                r = _read_updates(repo, refs, remote, url, words, stops, notes)
+                notes += more
+                stops += _hits(r)
+                _check_files(repo, r, name, key, mode, stops, notes)
+                if mode and transfer:
+                    stops.append(('transfer', 'the separate upload hook has no destination approval'))
+        if not stops and not preview and deferred:
+            own = run_first(first, argv, refs)
+            if own:
+                code = own
+                stops.append(('hook', "the repository's own pre-push hook stopped the push after inspection"))
+            elif own == 0:
+                notes.append("the repository's own pre-push hook passed after inspection")
+    except (GitError, OSError) as e:
+        stops.append(('error', str(e) if isinstance(e, GitError) else 'the inspection could not be completed'))
+    code = code or int(bool(stops))
+    clean = cleaner(words)
+    lines = [clean(line) for line in _push_lines(repo, remote, r, words, stops, notes)]
+    record = inspection_record('preview' if preview else 'hook', clean(remote), code, {k for k, _ in stops}, r,
+                               policy, words is not None)
+    return code, lines, record
+
+
+def prepush(argv, refs, repo=None, first=None, save=False):
+    repo = repo or os.getcwd()
+    code, lines, record = inspect_push(argv, refs, repo, first)
+    if save:
+        try:
+            save_receipt(repo, record)
+        except (OSError, GitError):
+            return 1, lines + [f'{NAME}: the requested receipt could not be saved; the push is stopped']
+    return code, lines
 
 
 def kept_message(text, repo):
@@ -205,7 +290,8 @@ def commit_hook(name, argv, repo=None, first=None):
                    if name == 'pre-commit' else [])
     notes = [f"this repository's own {name} check ran first and passed ({chained})"] if own == 0 else []
     words, stops, more = _lists(repo)
-    notes += more
+    if stops:
+        return 1, [f'{NAME}: the commit is stopped', *('  ' + reason for _, reason in stops)]
     r = None
     try:
         if name == 'pre-commit':
@@ -217,10 +303,11 @@ def commit_hook(name, argv, repo=None, first=None):
                 r = read_commit(repo, words, staged=False, message=kept_message(f.read(), repo))
     except GitError as e:
         stops.append(('error', f'could not read what the commit adds: {e}'))
-    except OSError as e:
-        stops.append(('error', f'could not read the commit message ({e.strerror or e})'))
+    except OSError:
+        stops.append(('error', 'could not read the commit message'))
     if r:
         stops += _hits(r)
+        notes += more
     if not stops:
         read = (f"{count(r['lines'], 'added line')} and {count(r['files'], 'new file name')} read for the commit"
                 if name == 'pre-commit' else 'the commit message read')
@@ -238,7 +325,7 @@ def commit_hook(name, argv, repo=None, first=None):
                      'git config telonion.checkCommits false (its pushes are still read).')
     if 'credential' in kinds:
         lines.append('  A credential belongs in no commit: keep it outside the repository.')
-    return 1, lines + [f'  {n}' for n in notes]
+    return 1, [clean(line) for line in lines + [f'  {n}' for n in notes]]
 
 
 # The hooks in a repository.
@@ -266,8 +353,8 @@ def hook_body(name='pre-push'):
     if name == 'pre-push':
         return ('#!/bin/sh\n'
                 f'# {MARK} (written by telonion install): every push from this repository is read before it leaves.\n'
-                f'# A pre-push hook the repository had of its own runs first: {CHAINED}, beside this file.\n'
-                f'exec {shlex.quote(PY)} {shlex.quote(LAUNCHER)} hook --first "$(dirname "$0")/{CHAINED}" "$@"\n')
+                f'# The repository keeps its own pre-push hook beside this file as {CHAINED}.\n'
+                f'exec {shlex.quote(PY)} {shlex.quote(LAUNCHER)} hook --first "$(dirname "$0")/{CHAINED}" -- "$@"\n')
     what = {'pre-commit': 'what each commit adds is read before the commit is made',
             'commit-msg': "each commit's message is read before the commit is made"}[name]
     return ('#!/bin/sh\n'
@@ -285,9 +372,23 @@ def _read(path):
         return None
 
 
-def _kind(text, name='pre-push'):
-    return ('none' if text is None else 'in place' if text == hook_body(name)
-            else 'out of date' if mark(name) in text or old_mark(name) in text else "another tool's")
+_NEEDS_UPDATE = ('out of date', 'not executable', 'command unavailable')
+
+
+def _command_available():
+    return (os.path.isfile(PY) and os.access(PY, os.X_OK) and
+            os.path.isfile(LAUNCHER) and os.access(LAUNCHER, os.R_OK))
+
+
+def hook_kind(path, name):
+    text = _read(path)
+    if text is None:
+        return 'none'
+    if text != hook_body(name):
+        return 'out of date' if mark(name) in text or old_mark(name) in text else "another tool's"
+    if not os.access(path, os.X_OK):
+        return 'not executable'
+    return 'in place' if _command_available() else 'command unavailable'
 
 
 def _write_hook(path, name='pre-push'):
@@ -314,12 +415,13 @@ def state(repo):
     if paths is None:
         return dict(hook='not a repository', path=None, chained=False, hooks={}, remotes=[], hooks_path=None,
                     commits=False)
-    hooks = {n: dict(hook=_kind(_read(p), n), path=p, chained=os.path.lexists(p + '.chained')) for n, p in paths.items()}
+    hooks = {n: dict(hook=hook_kind(p, n), path=p, chained=os.path.lexists(p + '.chained')) for n, p in paths.items()}
     remotes = subprocess.run(['git', '-C', repo, 'remote'], capture_output=True, text=True,
                              stdin=subprocess.DEVNULL).stdout.split()
     hooks_path = config(repo, 'core.hooksPath')
     return dict(hooks['pre-push'], hooks=hooks, remotes=remotes, hooks_path=hooks_path[-1] if hooks_path else None,
-                commits=setting(repo, 'checkCommits', '--type=bool')[-1:] != ['false'], old=old_names(repo))
+                commits=setting(repo, 'checkCommits', '--type=bool')[-1:] != ['false'], old=old_names(repo),
+                transfer=transfer_hook(repo, paths['pre-push'] + '.chained'))
 
 
 def _local_keys(repo, section):
@@ -361,13 +463,15 @@ def move_old_names(repo):
 
 def install(repo, update=False):
     """Telonion's hooks written into `repo`: pre-push, pre-commit, and commit-msg. A hook of one of those names that
-    the repository has of its own is kept and run first: it moves beside Telonion's as <name>.chained. Nothing is
+    the repository has of its own is kept beside Telonion's as <name>.chained. Nothing is
     written when core.hooksPath sends git to a shared folder, or when another tool's hook stands where Telonion's
     was with a different one chained beside it. With `update`, the pre-push hook is put in place and the commit hooks
     only where Telonion's (or Push Gate's) already are: no commit check is added. -> (done, words)."""
     s = state(repo)
     if s['path'] is None:
         return False, f'{repo} is not a git repository'
+    if not _command_available():
+        return False, 'the hook command is unavailable: restore Python and the Telonion launcher first'
     if s['hooks_path']:
         return False, (f'core.hooksPath is set ({s["hooks_path"]}): git runs hooks from there for every repository that '
                        f'uses it, so nothing was written. A pre-push, pre-commit, or commit-msg hook there can run: '
@@ -379,7 +483,7 @@ def install(repo, update=False):
                            f'install again')
     written = []
     for n, h in s['hooks'].items():
-        if h['hook'] == 'in place' or (update and n != 'pre-push' and h['hook'] != 'out of date'):
+        if h['hook'] == 'in place' or (update and n != 'pre-push' and h['hook'] not in _NEEDS_UPDATE):
             continue
         if h['hook'] == "another tool's" and not h['chained']:
             os.replace(h['path'], h['path'] + '.chained')   # the same name, beside: its mode and contents unchanged
@@ -400,8 +504,13 @@ def install(repo, update=False):
 
     chained = [n for n in HOOKS if os.path.lexists(s['hooks'][n]['path'] + '.chained')]
     if chained:
+        after = ('pre-push' in chained and
+                 (destinations(repo) or transfer_hook(repo, s['hooks']['pre-push']['path'] + '.chained')))
+        order = 'in the chain' if after else 'first'
         words += (f"; this repository's own {listed(chained)} {'hook runs' if len(chained) == 1 else 'hooks run'} "
-                  f"first ({', '.join(n + '.chained' for n in chained)})")
+                  f"{order} ({', '.join(n + '.chained' for n in chained)})")
+        if after:
+            words += '; the pre-push hook waits for inspection'
     return True, words
 
 
@@ -414,7 +523,7 @@ def uninstall(repo):
         return False, f'{repo} is not a git repository'
     out, back = [], []
     for n, h in s['hooks'].items():
-        if h['hook'] in ('in place', 'out of date'):
+        if h['hook'] in ('in place', *_NEEDS_UPDATE):
             os.remove(h['path'])
             out.append(n)
             if h['chained']:
@@ -473,7 +582,7 @@ def template_state():
     if not d:
         return dict(dir=None, hook='none', hooks={n: 'none' for n in HOOKS})
     d = os.path.expanduser(d)
-    hooks = {n: _kind(_read(os.path.join(d, 'hooks', n)), n) for n in HOOKS}
+    hooks = {n: hook_kind(os.path.join(d, 'hooks', n), n) for n in HOOKS}
     return dict(dir=d, hook=hooks['pre-push'], hooks=hooks)
 
 
@@ -484,6 +593,8 @@ def template_on(update=False):
     pre-push hook is put in place and the commit hooks only where Telonion's (or Push Gate's) already are.
     -> (done, words)."""
     t = template_state()
+    if not _command_available():
+        return False, 'the hook command is unavailable: restore Python and the Telonion launcher first'
     other = [n for n, k in t['hooks'].items() if k == "another tool's"]
     if other:
         return False, (f"git's template ({short_path(t['dir'])}) has another tool's {listed(other)} "
@@ -498,7 +609,7 @@ def template_on(update=False):
                            stdin=subprocess.DEVNULL)
         if r.returncode:
             os.rename(new, d)
-            return False, f'could not set init.templateDir: {r.stderr.strip()}'
+            return False, 'could not set init.templateDir'
         d, moved = new, True
     if d is None:
         d = own_template()
@@ -508,9 +619,9 @@ def template_on(update=False):
         r = subprocess.run(['git', 'config', '--global', 'init.templateDir', d], capture_output=True, text=True,
                            stdin=subprocess.DEVNULL)
         if r.returncode:
-            return False, f'could not set init.templateDir: {r.stderr.strip()}'
+            return False, 'could not set init.templateDir'
     for n, k in t['hooks'].items():
-        if k != 'in place' and not (update and n != 'pre-push' and k != 'out of date'):
+        if k != 'in place' and not (update and n != 'pre-push' and k not in _NEEDS_UPDATE):
             _write_hook(os.path.join(d, 'hooks', n), n)
     return True, (f"repositories made or cloned from now on get the hooks from git's template ({short_path(d)})"
                   + (f' (moved from {short_path(old_template())})' if moved else ''))
@@ -520,7 +631,7 @@ def template_off():
     """Telonion's hooks taken out of git's template; Telonion's own template folder is unset as well, unless another
     tool's hook is there. -> (done, words)."""
     t = template_state()
-    ours = [n for n, k in t['hooks'].items() if k in ('in place', 'out of date')]
+    ours = [n for n, k in t['hooks'].items() if k in ('in place', *_NEEDS_UPDATE)]
     if not ours:
         return True, "git's template has no Telonion hook"
     for n in ours:

@@ -1,8 +1,14 @@
 """Telonion: reads what a git push would make public, and stops a push that holds a private word or a credential."""
+import hashlib
 import os
 
 NAME = 'Telonion'
-VERSION = '0.4.0'
+VERSION = '0.5.0'
+
+
+def fingerprint(*parts):
+    """A local approval identity, with an unambiguous boundary between fields."""
+    return hashlib.sha256(b'\0'.join(os.fsencode(p) for p in parts)).hexdigest()
 
 
 def count(n, one, many=None):

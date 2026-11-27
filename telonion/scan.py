@@ -10,11 +10,12 @@ Nothing found is printed in full. Each hit names its place, and the word or cred
 lands in a terminal log or an assistant's transcript does not repeat what the check exists to keep private.
 """
 import fnmatch
+import io
 import os
 import re
 import subprocess
 
-from . import short_path
+from . import fingerprint, short_path
 
 ZERO = '0' * 40
 EXCERPT = 160                                      # characters of a line shown with a hit, after masking
@@ -24,28 +25,33 @@ class GitError(RuntimeError):
     """A git command failed: what it was reading is unknown, so it is never a clean reading."""
 
 
-def git(repo, *args, stdin=None, timeout=None, env=None):
-    """git's output, run in `repo` with file names unquoted. GitError when git fails or does not answer in time."""
+def git(repo, *args, stdin=None, timeout=None, env=None, binary=False):
+    """Git's output. Its diagnostics can contain URLs, ref names, and private paths; never relay them."""
     io = dict(input=stdin) if stdin is not None else dict(stdin=subprocess.DEVNULL)
     try:
         r = subprocess.run(['git', '-C', repo, '-c', 'core.quotePath=false', *args], capture_output=True,
-                           encoding='utf-8', errors='replace', timeout=timeout, env=env, **io)
+                            encoding=None if binary else 'utf-8', errors=None if binary else 'replace',
+                            timeout=timeout, env=env, **io)
     except subprocess.TimeoutExpired:
         raise GitError(f'git {args[0]}: no answer in {timeout} s')
-    except OSError as e:
-        raise GitError(f'git: {e}')
+    except OSError:
+        raise GitError('git could not be started') from None
     if r.returncode:
-        raise GitError(f'git {args[0]}: {(r.stderr or r.stdout).strip()[:300]}')
+        raise GitError(f'git {args[0]} failed (exit {r.returncode})')
     return r.stdout
 
 
-def config(repo, key, *kind):
+def config(repo, key, *kind, git_env=None):
     """A git setting as the repository sees it (its own, then the global one): every value, [] when it is unset.
     For a folder that does not exist, the global setting alone."""
-    where = ['-C', repo] if repo and os.path.isdir(repo) else []
-    r = subprocess.run(['git', *where, 'config', *kind, '--get-all', key], capture_output=True, text=True,
-                       stdin=subprocess.DEVNULL)
-    return [v for v in r.stdout.split('\n') if v] if r.returncode == 0 else []
+    where = ['-C', repo] if repo and (git_env is not None or os.path.isdir(repo)) else []
+    r = subprocess.run(['git', *where, 'config', '-z', *kind, '--get-all', key], capture_output=True, text=True,
+                       stdin=subprocess.DEVNULL, env=git_env)
+    if r.returncode == 1:
+        return []
+    if r.returncode:
+        raise GitError('git settings could not be read')
+    return r.stdout.split('\0')[:-1]
 
 
 # The name before Telonion was Push Gate: its settings (pushgate.*), variables ($PUSHGATE_*), and files
@@ -54,13 +60,13 @@ def config(repo, key, *kind):
 OLD = 'pushgate'
 
 
-def setting(repo, name, *kind, both=False):
+def setting(repo, name, *kind, both=False, git_env=None):
     """The setting telonion.<name>, else the old pushgate.<name>: every value, [] when neither is set. With `both`,
     the values of the two together (for a setting that adds up, such as allowCode)."""
-    new = config(repo, f'telonion.{name}', *kind)
+    new = config(repo, f'telonion.{name}', *kind, git_env=git_env)
     if new and not both:
         return new
-    return new + config(repo, f'{OLD}.{name}', *kind)
+    return new + config(repo, f'{OLD}.{name}', *kind, git_env=git_env)
 
 
 def env(name):
@@ -77,15 +83,28 @@ def _home_config(*parts):
 
 # The private word list.
 
-def words_path(repo='.'):
-    """Where the private word list is: $TELONION_WORDS, else `git config telonion.words` (the repository's setting,
-    then the global one), else ~/.config/telonion/words.txt; the old names (Push Gate's) where the new are not set."""
+def repository_root(repo, git_env=None):
+    bare = git(repo, 'rev-parse', '--is-bare-repository', env=git_env).strip() == 'true'
+    root = git(repo, 'rev-parse', '--absolute-git-dir' if bare else '--show-toplevel', binary=True, env=git_env)
+    return os.fsdecode(root.removesuffix(b'\n'))
+
+
+def _selected_words(repo, git_env=None, *, from_root=False):
     if env('WORDS'):
         return os.path.expanduser(env('WORDS'))
-    set_in_git = setting(repo, 'words', '--type=path')
+    set_in_git = setting(repo, 'words', '--type=path', git_env=git_env)
     if set_in_git:
-        return os.path.expanduser(set_in_git[-1])
-    return _home_config('words.txt')
+        path = os.path.expanduser(set_in_git[-1])
+        if from_root and not os.path.isabs(path):
+            return os.path.join(repository_root(repo, git_env), path)
+        return path
+    return None
+
+
+def words_path(repo='.'):
+    """The explicitly selected main list, or the optional default in the user's config folder."""
+    selected = _selected_words(repo)
+    return _home_config('words.txt') if selected is None else selected
 
 
 def _pattern(text):
@@ -117,7 +136,7 @@ class Words:
         self.included = included
 
     @classmethod
-    def read(cls, path):
+    def read(cls, path, label=None):
         """The list at `path` with the files it includes, or None when no file is there. A list that is there and
         cannot be read raises OSError, and so does an include whose file is not there or cannot be read (ListError):
         no part of a list that exists is skipped.
@@ -164,7 +183,7 @@ class Words:
             seen.add(os.path.realpath(file))
             take(lines, os.path.dirname(file), lambda m: f'{where}, line {m} of the file it includes', depth)
 
-        top = short_path(os.path.abspath(path))
+        top = label or short_path(os.path.abspath(path))
         take(lines, os.path.dirname(os.path.abspath(path)), lambda n: f'{top} line {n}', 0)
         return cls(path, words, allows, included=(len(seen) - 1, given[0], given[1]))
 
@@ -192,17 +211,27 @@ def own_words_path(repo='.'):
                        capture_output=True, text=True, stdin=subprocess.DEVNULL)
     if r.returncode or not r.stdout.strip():
         return None
-    info = os.path.join(r.stdout.strip().split('\n')[-1], 'info')
+    return _own_list(r.stdout.removesuffix('\n'))
+
+
+def _own_list(common):
+    info = os.path.join(common, 'info')
     new, old = os.path.join(info, 'telonion-words'), os.path.join(info, f'{OLD}-words')
     return old if not os.path.lexists(new) and os.path.lexists(old) else new
 
 
-def read_words(repo='.'):
+def read_words(repo='.', *, common=None, git_env=None):
     """The main list (words_path) and the repository's own (own_words_path), read as one, or None when neither
     exists. A list that exists and cannot be read raises OSError: a list that exists is never skipped."""
-    main = Words.read(words_path(repo))
-    own_path = own_words_path(repo)
-    own = Words.read(own_path) if own_path else None
+    selected = _selected_words(repo, git_env, from_root=common is not None)
+    path = selected if selected is not None else _home_config('words.txt')
+    main = Words.read(path, 'main word list')
+    if main is None and (selected is not None or os.path.lexists(path)):
+        raise ListError('the configured word list is missing')
+    own_path = _own_list(common) if common is not None else own_words_path(repo)
+    own = Words.read(own_path, 'repository word list') if own_path else None
+    if own is None and own_path and os.path.lexists(own_path):
+        raise ListError("the repository's word list could not be read")
     if main is None or own is None:
         return main or own
     return main.joined(own)
@@ -232,6 +261,14 @@ RUNS_CODE = re.compile(r'(?:^|/)(?:\.github/(?:workflows|actions)/.*|action\.ya?
                        r'setup\.cfg|pyproject\.toml|Makefile|\.gitlab-ci\.yml|\.circleci/.*)$')
 
 
+def key_file(path):
+    return KEY_FILES.search(path) and not KEY_FILES_OK.search(path)
+
+
+def unapproved_code(path, allowed):
+    return allowed is not None and RUNS_CODE.search(path) and not any(fnmatch.fnmatchcase(path, a) for a in allowed)
+
+
 def credential_spans(text):
     """The credentials in `text`: (what the first one is, [(start, end)]), or (None, [])."""
     what, spans = None, []
@@ -259,12 +296,17 @@ def mask(text, spans):
     return ''.join(out) + text[at:]
 
 
+_ADDRESS = re.compile(r'(?:[a-zA-Z][a-zA-Z0-9+.-]*://|[^\s/@:]+@[^\s/:]+:)\S+')
+
+
 def cleaner(words):
     """A function that masks every word of `words` (a Words, or None) and every credential in a text."""
     def clean(text):
         spans = [(s, e, 'private') for s, e in (words.spans(text) if words else [])]
         spans += [(s, e, 'credential') for s, e in credential_spans(text)[1]]
-        return mask(text, spans) if spans else text
+        spans += [(m.start(), m.end(), 'address') for m in _ADDRESS.finditer(text)]
+        masked = mask(text, spans) if spans else text
+        return ''.join(c if c.isprintable() else ascii(c)[1:-1] for c in masked)
     return clean
 
 
@@ -275,7 +317,7 @@ def _excerpt(text):
 
 # What a push sends.
 
-_SHA = re.compile(r'[0-9a-f]{40}(?:[0-9a-f]{24})?$')
+OBJECT_ID = re.compile(r'[0-9a-f]{40}(?:[0-9a-f]{24})?$')
 _HUNK = re.compile(r'@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@')
 
 
@@ -315,7 +357,7 @@ def fetched(repo, remote):
 def advertised(repo, remote, timeout=60):
     """What `remote` holds now, by asking it (git ls-remote): the object each of its refs names, tags peeled too.
     GitError when it cannot be asked."""
-    out = git(repo, 'ls-remote', remote, timeout=timeout, env=dict(os.environ, GIT_TERMINAL_PROMPT='0'))
+    out = git(repo, 'ls-remote', '--', remote, timeout=timeout, env=dict(os.environ, GIT_TERMINAL_PROMPT='0'))
     return [line.split('\t')[0] for line in out.split('\n') if '\t' in line]
 
 
@@ -340,11 +382,10 @@ class _Reading:
     def look_name(self, where, name):
         """A file that is added or renamed: its name, and what the name says it holds or does."""
         self.look(where, name, ('name', name))
-        if KEY_FILES.search(name) and not KEY_FILES_OK.search(name) and ('k', name) not in self.seen:
+        if key_file(name) and ('k', name) not in self.seen:
             self.seen.add(('k', name))
             self.credentials.append((self.clean(where), 'a file that holds keys by its name', _excerpt(self.clean(name))))
-        if (self.allow_code is not None and RUNS_CODE.search(name) and ('r', name) not in self.seen
-                and not any(fnmatch.fnmatchcase(name, a) for a in self.allow_code)):
+        if unapproved_code(name, self.allow_code) and ('r', name) not in self.seen:
             self.seen.add(('r', name))
             self.code.append((self.clean(where), _excerpt(self.clean(name))))
 
@@ -365,7 +406,7 @@ def _walk(patch, on_line, on_name):
             elif line.startswith(' '):
                 old, new, n = old - 1, new - 1, n + 1
             continue
-        if _SHA.match(line):                       # the commit whose diff follows (a merge's comes once a parent)
+        if OBJECT_ID.fullmatch(line):              # the commit whose diff follows (a merge's comes once a parent)
             sha = line
         elif line.startswith(':') and '\t' in line:   # a raw line: the status, then the file names
             f = line.split('\t')
@@ -384,17 +425,115 @@ _DIFF = ('--patch-with-raw', '-M', '--unified=0', '--no-color', '--no-ext-diff',
          '--dst-prefix=b/')
 
 
-def read_push(repo, tips, stop=(), words=None, allow_code=(), tag_refs=(), ref_names=()):
+OPAQUE_NAME = re.compile(r'\.(?:pdf|docx?|xlsx?|pptx?|od[pts]|zip|gz|7z|png|jpe?g|gif|webp|mp[34]|wav)$', re.I)
+_LFS_VERSIONS = (b'version https://git-lfs.github.com/spec/v1', b'version https://hawser.github.com/spec/v1')
+
+
+def lfs_pointers(repo, blobs):
+    """Recognize the pointer in the committed blob, even on a rename or a change only to its object ID."""
+    if not blobs:
+        return set()
+    sizes = git(repo, 'cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)',
+                stdin=''.join(oid + '\n' for oid in blobs))
+    small = []
+    for line in sizes.splitlines():
+        fields = line.split()
+        if len(fields) != 3 or fields[1] != 'blob' or not fields[2].isdigit():
+            raise GitError('a changed file could not be read')
+        if len(_LFS_VERSIONS[0]) <= int(fields[2]) <= 1024:
+            small.append(fields[0])
+    if not small:
+        return set()
+    data = io.BytesIO(git(repo, 'cat-file', '--batch', binary=True, stdin=('\n'.join(small) + '\n').encode('ascii')))
+    pointers = set()
+    for oid in small:
+        fields = data.readline().split()
+        if len(fields) != 3 or fields[:2] != [oid.encode('ascii'), b'blob'] or not fields[2].isdigit():
+            raise GitError('a changed file could not be read')
+        body = data.read(int(fields[2]))
+        if data.read(1) != b'\n':
+            raise GitError('a changed file was not read in full')
+        if body.partition(b'\n')[0].rstrip(b'\r') in _LFS_VERSIONS:
+            pointers.add(oid)
+    return pointers
+
+
+def file_versions(repo, feed, clean):
+    """Changed (path, object) pairs whose contents a line diff cannot inspect. Use Git's binary
+    classification, including attributes. Turning off rename detection here gives a new path its own decision."""
+    raw = git(repo, 'diff-tree', '--stdin', '--root', '-m', '-r', '--no-renames', '--raw', '--numstat',
+              '--no-abbrev', '--no-ext-diff', '--no-textconv', '-z', binary=True, stdin=feed.encode('ascii'))
+    records = iter(raw.split(b'\0'))
+    versions, binary, submodules, changed = {}, set(), set(), {}
+    commit = ''
+    for entry in records:
+        if entry.startswith(b':'):
+            _, mode, _, object_id, status = entry.split()
+            path = os.fsdecode(next(records))
+            if status != b'D':
+                key = path, object_id.decode('ascii')
+                changed[path] = key
+                versions.setdefault(key, commit)
+                if mode == b'160000':
+                    submodules.add(key)
+        elif entry.startswith(b'-\t-\t'):
+            key = changed.get(os.fsdecode(entry[4:]))
+            if key:
+                binary.add(key)
+        elif re.fullmatch(rb'[a-f0-9]{40}(?:[a-f0-9]{24})?', entry):
+            commit = entry.decode('ascii')
+            changed = {}
+    pointers = lfs_pointers(repo, {oid for path, oid in versions if (path, oid) not in submodules})
+    opaque = []
+    for key, sha in versions.items():
+        path, oid = key
+        if oid in pointers:
+            kind = 'LFS'
+        elif key in submodules:
+            kind = 'submodule'
+        elif key in binary or OPAQUE_NAME.search(path):
+            kind = 'file'
+        else:
+            continue
+        opaque.append((clean(path), fingerprint(path, oid), sha, kind))
+    return opaque
+
+
+def _outgoing_tags(repo, tips, found):
+    """Read actual tag objects, including a tag sent under a different ref, or a tag of another tag."""
+    seen = set()
+    for tip in tips:
+        oid = tip
+        while oid not in seen:
+            seen.add(oid)
+            kind = git(repo, 'cat-file', '-t', oid).strip()
+            if kind == 'commit':
+                break
+            if kind != 'tag':
+                raise GitError('the push names an object other than a commit or a tag of a commit')
+            headers, _, body = git(repo, 'cat-file', 'tag', oid).partition('\n\n')
+            fields = dict(line.split(' ', 1) for line in headers.splitlines() if ' ' in line)
+            if not OBJECT_ID.fullmatch(fields.get('object', '')) or 'tag' not in fields:
+                raise GitError('a tag could not be read')
+            name = fields['tag']
+            found.look(f'tag {name}', name, ('tag name', oid))
+            found.look(f'tag {name} tagger', fields.get('tagger', ''), ('tagger', oid))
+            for line in body.split('\n'):
+                found.look(f'tag {name}', line, ('tag', oid, line))
+            oid = fields['object']
+
+
+def read_push(repo, tips, stop=(), words=None, allow_code=(), tag_refs=None, ref_names=()):
     """What a push of `tips` makes public beyond the commits under `stop`, read against `words` (a Words, or None when
     there is no list) and the credential formats.
 
     Each commit is read on its own: the lines it adds (a merge's, against each parent), the names of the files it adds
-    or renames, its message, its author and committer, and the annotated tags on it (`git push --follow-tags` sends
-    those). A word that a later commit replaced is still in the commit that added it. `tag_refs` are tags read in full
-    though their commit is already public; `ref_names` are the names the push gives refs on the remote.
+    or renames, its message, its author and committer, and the tag objects actually proposed. In an offline estimate
+    (`tag_refs=None`), include the annotated tags that might follow these commits. `ref_names` are destination refs.
 
     -> {commits, lines, files, private: [(where, excerpt)], credentials: [(where, what, excerpt)],
-        code: [(where, name)]}, every text masked. GitError when a git command fails: never a clean reading."""
+        code: [(where, name)], opaque: [(masked path, version fingerprint, commit, kind)]}. Git errors stop the read."""
+    tips = list(tips)
     found, out, names = _Reading(words, allow_code), dict(commits=0, lines=0, files=0), set()
 
     def added(sha, path, n, text):
@@ -422,21 +561,19 @@ def read_push(repo, tips, stop=(), words=None, allow_code=(), tag_refs=(), ref_n
             found.look(f'commit {short} committer', committer, ('committer', committer), credentials=False)
             for line in body.split('\n'):
                 found.look(f'commit {short}', line, ('message', short, line))
-    if shas or tag_refs:
-        sent, wanted = set(shas), set(tag_refs)
-        fmt = '%(objecttype)%00%(*objectname)%00%(refname)%00%(taggername) %(taggeremail)%00%(contents)%1e'
-        for rec in git(repo, 'for-each-ref', f'--format={fmt}', 'refs/tags').split('\x1e'):
-            kind, target, ref, tagger, body = (rec.lstrip('\n').split('\x00', 4) + [''] * 5)[:5]
-            if kind != 'tag' or (target not in sent and ref not in wanted):
-                continue
-            name = ref[len('refs/tags/'):]
-            found.look(f'tag {name}', name, ('tag name', name))
-            found.look(f'tag {name} tagger', tagger, ('tagger', tagger), credentials=False)
-            for line in body.split('\n'):
-                found.look(f'tag {name}', line, ('tag', name, line))
+    tag_tips = tips + list(tag_refs or ())
+    if tag_refs is None and shas:                   # an offline estimate includes tags that might follow these commits
+        sent = set(shas)
+        fmt = '%(objectname)%09%(*objectname)'
+        for line in git(repo, 'for-each-ref', f'--format={fmt}', 'refs/tags').splitlines():
+            oid, _, target = line.partition('\t')
+            if target in sent:
+                tag_tips.append(oid)
+    _outgoing_tags(repo, tag_tips, found)
     for ref in ref_names:
         found.look('ref on the remote', ref, ('ref', ref))
-    return dict(out, private=found.private, credentials=found.credentials, code=found.code)
+    return dict(out, private=found.private, credentials=found.credentials, code=found.code,
+                opaque=file_versions(repo, feed, found.clean) if shas else [])
 
 
 # What the next commit adds.

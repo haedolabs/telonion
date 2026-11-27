@@ -2,18 +2,19 @@
 
 By [Haedo Labs](https://haedolabs.com)™.
 
-A git hook that stops a push, or a commit, holding a word from your private list or a credential. It runs on your own computer and sends nothing anywhere.
+A local check for Git pushes and directories prepared for publishing. It reads what would be sent, checks for private words and credentials, and verifies the required destination and file approvals.
 
-A telonion was the toll house at a city gate, where goods were checked before they passed.
+A telonion was a customs post where goods were checked before they passed.
 
 ## What it does
 
-- **Reads every commit the remote lacks.** Added lines, new file names, messages, authors, committers, tags, and the ref names a push creates, each commit on its own. It asks the remote what it holds (`git ls-remote`), and reads the full history when it cannot.
+- **Reads the proposed push.** Git supplies the outgoing refs. Telonion checks the added lines, names, messages, authors, committers, and tags in the outgoing history. The live preview uses the same inspection.
 - **Stops private words.** Regular expressions from a list kept outside every repository, with `allow:` lines for text that may pass, and a repository's own list in `.git/info/telonion-words`.
 - **Stops credentials.** Tokens and keys in their fixed formats, private key blocks, key files by name (`.env`, `*.pem`), and long literals given to names like `password`.
 - **Stops risky pushes.** New files that run code on a host or on install, and pushes that rewrite or delete a remote branch, each allowed per repository.
 - **Masks every hit.** Each names its commit and place, with the match shown as `[private]` or `[credential]`, so logs and AI transcripts never repeat it.
-- **Keeps your hooks.** A repository's own hook runs first, as `<name>.chained`.
+- **Checks destinations.** An approval binds a remote name to its push URL. A release destination also requires approval for each file version checked by name only.
+- **Reports the decision.** The terminal shows the counts and any masked findings. Saving a receipt is optional. Existing repository hooks are kept.
 
 ## Install
 
@@ -28,13 +29,33 @@ bin/telonion template                # the hooks in every repository made from n
 ## Use
 
 ```bash
-bin/telonion check -C ~/code/app           # what the next push would make public
-bin/telonion check --all -C ~/code/app     # every commit, as before a first push
+bin/telonion check --live -C ~/code/app    # preview Git's proposed push
+bin/telonion check -C ~/code/app           # offline estimate against the last fetch
 bin/telonion check --staged -C ~/code/app  # what the next commit adds
-bin/telonion status ~/code/*               # which repositories have the hooks
+bin/telonion status ~/code/*               # hook health and destination rules
 ```
 
-`git push --no-verify` skips the hook: it guards against accidents, not intent.
+With `bin/telonion` on your `PATH`, run these in a repository to limit its pushes to approved destinations:
+
+```bash
+telonion destination origin                # approve its current push URL
+telonion destination --release release     # require approval for name-only files here
+telonion approve release docs/guide.pdf    # this file at HEAD, for release alone
+telonion check --live --remote release --receipt main
+```
+
+A selected word list must be readable. Content checks run locally. Git contacts the destination for the live preview. Separate Git LFS transfers are held in repositories with destination rules.
+
+For a direct Cloudflare Pages upload, use the actual account ID, project, environment, and branch from the publisher. The source repository needs no remote:
+
+```bash
+target="cloudflare-pages/$account_id/$project/production/$branch"
+telonion destination -C "$repo" --publish "$target"
+telonion approve -C "$repo" --directory "$stage" --destination "$target" -- assets/logo.png
+telonion check -C "$repo" --directory "$stage" --destination "$target" --json
+```
+
+The result identifies the directory by digest: exit `0` passed, `1` held, or `2` incomplete. The publisher keeps the stage immutable from inspection through upload.
 
 ## Reference
 

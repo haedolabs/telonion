@@ -26,7 +26,7 @@ class PrePush(Box):
     def test_a_clean_push_goes(self):
         code, out = self.push(self.commit(self.r, {'c.txt': 'fine\n'}), self.base)
         self.assertEqual(code, 0, out)
-        self.assertIn('1 commit, 1 added line, and 1 new file name read for origin: nothing private and no credentials', out)
+        self.assertIn('1 commit, 1 added line, and 1 new file name read for origin: no private-word or credential matches', out)
 
     def test_a_private_word_stops_it_and_is_not_shown(self):
         code, out = self.push(self.commit(self.r, {'d.txt': 'the zephyr notes\n'}), self.base)
@@ -84,6 +84,7 @@ class PrePush(Box):
 
     def test_no_word_list_is_said(self):
         os.remove(self.words_file)
+        del os.environ['TELONION_WORDS']
         code, out = self.push(self.commit(self.r, {'h.txt': 'zephyr\n'}), self.base)
         self.assertEqual(code, 0, out)
         self.assertIn('credentials were checked, private words were not', out)
@@ -133,7 +134,7 @@ class PrePush(Box):
         self.words(f'zephyr\ninclude: {os.path.join(self.box, "quokka", "names.txt")}\n')
         code, out = self.push(self.commit(self.r, {'h.txt': 'fine\n'}), self.base)
         self.assertEqual(code, 1, out)
-        self.assertIn('~/words.txt line 2: the file it includes is not there', out)
+        self.assertIn('main word list line 2: the file it includes is not there', out)
         self.assertNotIn('quokka', out)
 
 

@@ -85,6 +85,51 @@ class Directory(Box):
         del os.environ['TELONION_WORDS']
         self.assertEqual(self.check(0)['reasons'], [])
 
+    def test_exact_publish_text_uses_the_original_line_in_its_repository_only(self):
+        from telonion.scan import read_words
+
+        self.words('quokka\nallow: public label\n')
+        line = '  Public label: quokka [2].\t'
+        included = Path(self.box, 'local-list')
+        included.write_text('publish-exact: ' + json.dumps(line) + '\n')
+        own = Path(self.repo_dir, '.git/info/telonion-words')
+        own.write_text(f'include: {included}\n')
+        page = self.root / 'page.txt'
+        page.write_bytes((line + '\r\n').encode())
+        self.enroll()
+        self.check(0)
+        self.assertTrue(read_words(self.repo_dir).spans(line), 'Git and diagnostic masking must still see the word')
+        self.assertIn('private_word', self.check(1, repo=self.repo('other'))['reasons'])
+        for changed in (line.strip(), line.lower(), line + ' extra', 'prefix ' + line, line + '\nquokka'):
+            with self.subTest(changed=changed):
+                page.write_text(changed)
+                self.assertEqual(self.check(1)['reasons'], ['private_word'])
+
+    def test_exact_publish_path_and_line_do_not_approve_a_binary_or_a_credential(self):
+        own = Path(self.repo_dir, '.git/info/telonion-words')
+        name = 'quokka.png'
+        text = 'quokka ' + TOKEN
+        own.write_text(''.join('publish-exact: ' + json.dumps(s) + '\n' for s in (name, text)))
+        asset = self.root / name
+        asset.write_text(text)
+        self.enroll()
+        self.assertEqual(self.check(1)['reasons'], ['binary_unapproved', 'credential'])
+        self.assertEqual(self.approve(name).returncode, 0)
+        self.assertEqual(self.check(1)['reasons'], ['credential'])
+        asset.rename(self.root / ('other-' + name))
+        self.assertIn('private_word', self.check(1)['reasons'])
+
+    def test_exact_publish_entries_require_a_local_list_and_a_single_json_string(self):
+        own = Path(self.repo_dir, '.git/info/telonion-words')
+        self.enroll()
+        for value in ('quokka', '["quokka"]', '""', '"one\\ntwo"', '"one\\u0000two"'):
+            with self.subTest(value=value):
+                own.write_text('publish-exact: ' + value + '\n')
+                self.assertEqual(self.check(2)['reasons'], ['policy_unavailable'])
+        own.unlink()
+        self.words('publish-exact: "quokka"\n')
+        self.assertEqual(self.check(2)['reasons'], ['policy_unavailable'])
+
     def test_relative_configured_list_and_inherited_git_directory_use_the_selected_repository(self):
         self.enroll()
         del os.environ['TELONION_WORDS']

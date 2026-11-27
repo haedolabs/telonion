@@ -82,7 +82,7 @@ def _entries(parent, prefix=''):
 
 
 def _text_reasons(text, words):
-    if words and words.spans(text):
+    if words and text not in words.publish_exact and words.spans(text):
         yield 'private_word'
     if credential_spans(text)[0]:
         yield 'credential'

@@ -11,6 +11,7 @@ lands in a terminal log or an assistant's transcript does not repeat what the ch
 """
 import fnmatch
 import io
+import json
 import os
 import re
 import subprocess
@@ -117,8 +118,7 @@ def _pattern(text):
 
 
 class ListError(OSError):
-    """A list's `include:` line names a file that is not there or cannot be read. Its words name the list and the
-    line, never the file the line names: an include's path is a line of a private list, and lines are never printed."""
+    """A word-list entry could not be read. Report its list and line number, never its contents."""
 
 
 def _lines(path):
@@ -126,17 +126,28 @@ def _lines(path):
         return f.read().split('\n')
 
 
+def _publish_exact(value, where):
+    try:
+        text = json.loads(value)
+    except (ValueError, RecursionError):
+        text = None
+    if not isinstance(text, str) or not text or any(c in text for c in '\r\n\0'):
+        raise ListError(f'{where}: publish-exact needs one nonempty line as a JSON string')
+    return text
+
+
 class Words:
     """A private word list: one pattern a line, `allow: <pattern>` for text that may appear though it holds a word,
     `include: <path>` for another list read as part of this one, and # for notes. `paths` are the lists it was read
     from; `included` counts what the files they include gave: (files, patterns, allow lines)."""
 
-    def __init__(self, path, words, allows, paths=None, included=(0, 0, 0)):
+    def __init__(self, path, words, allows, paths=None, included=(0, 0, 0), publish_exact=()):
         self.path, self.words, self.allows, self.paths = path, words, allows, paths or [path]
         self.included = included
+        self.publish_exact = frozenset(publish_exact)
 
     @classmethod
-    def read(cls, path, label=None):
+    def read(cls, path, label=None, *, repository=False):
         """The list at `path` with the files it includes, or None when no file is there. A list that is there and
         cannot be read raises OSError, and so does an include whose file is not there or cannot be read (ListError):
         no part of a list that exists is skipped.
@@ -148,20 +159,29 @@ class Words:
         except FileNotFoundError:
             return None
         words, allows, seen, given = [], [], {os.path.realpath(path)}, [0, 0]    # given: by included files
+        publish_exact = set()
 
         def take(lines, folder, at, depth):
             for n, line in enumerate(lines, 1):
                 line = line.strip()
                 if not line or line.startswith('#'):
                     continue
-                key = line[:8].lower()
-                if key.startswith('allow:'):
-                    if line[6:].strip():
-                        allows.append(_pattern(line[6:].strip()))
+                prefix, colon, value = line.partition(':')
+                directive = prefix.lower() if colon else ''
+                if directive == 'allow':
+                    if value.strip():
+                        allows.append(_pattern(value.strip()))
                         if depth:
                             given[1] += 1
-                elif key == 'include:':
-                    include(line[8:].strip(), folder, at(n), depth + 1)
+                elif directive == 'include':
+                    include(value.strip(), folder, at(n), depth + 1)
+                elif directive == 'publish-exact':
+                    if not repository:
+                        raise ListError(f'{at(n)}: publish-exact belongs in a repository word list')
+                    text = _publish_exact(value, at(n))
+                    if depth and text not in publish_exact:
+                        given[1] += 1
+                    publish_exact.add(text)
                 else:
                     words.append(_pattern(line))
                     if depth:
@@ -185,12 +205,12 @@ class Words:
 
         top = label or short_path(os.path.abspath(path))
         take(lines, os.path.dirname(os.path.abspath(path)), lambda n: f'{top} line {n}', 0)
-        return cls(path, words, allows, included=(len(seen) - 1, given[0], given[1]))
+        return cls(path, words, allows, included=(len(seen) - 1, given[0], given[1]), publish_exact=publish_exact)
 
     def joined(self, other):
         """This list and `other` read as one: the words of both, and the allow lines of both."""
         return Words(self.path, self.words + other.words, self.allows + other.allows, self.paths + other.paths,
-                     tuple(a + b for a, b in zip(self.included, other.included)))
+                     tuple(a + b for a, b in zip(self.included, other.included)), self.publish_exact | other.publish_exact)
 
     def spans(self, text):
         """Where the list's words are in `text`, leaving out text an allow pattern covers: [(start, end)]."""
@@ -229,7 +249,7 @@ def read_words(repo='.', *, common=None, git_env=None):
     if main is None and (selected is not None or os.path.lexists(path)):
         raise ListError('the configured word list is missing')
     own_path = _own_list(common) if common is not None else own_words_path(repo)
-    own = Words.read(own_path, 'repository word list') if own_path else None
+    own = Words.read(own_path, 'repository word list', repository=True) if own_path else None
     if own is None and own_path and os.path.lexists(own_path):
         raise ListError("the repository's word list could not be read")
     if main is None or own is None:

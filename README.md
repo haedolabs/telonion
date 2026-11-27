@@ -9,7 +9,7 @@ A telonion was a customs post where goods were checked before they passed.
 ## What it does
 
 - **Reads the proposed push.** Git supplies the outgoing refs. Telonion checks the added lines, names, messages, authors, committers, and tags in the outgoing history. The live preview uses the same inspection.
-- **Stops private words.** Regular expressions from a list kept outside every repository, with `allow:` lines for text that may pass, and a repository's own list in `.git/info/telonion-words`.
+- **Stops private words.** Regular expressions from a list kept outside every repository, with `allow:` lines for text that may pass. A repository's own `.git/info/telonion-words` can also use `publish-exact:` for one complete line or relative path in a prepared publish directory.
 - **Stops credentials.** Tokens and keys in their fixed formats, private key blocks, key files by name (`.env`, `*.pem`), and long literals given to names like `password`.
 - **Stops risky pushes.** New files that run code on a host or on install, and pushes that rewrite or delete a remote branch, each allowed per repository.
 - **Masks findings.** Reported locations and excerpts mask private words and credentials as `[private]` or `[credential]`.

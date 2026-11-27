@@ -19,6 +19,8 @@ pattern a line (a regular expression, capitals and small letters alike; a line t
 `allow: <pattern>` for text that may appear though it holds a word, `include: <path>` for another list read as part of it
 (a path from ~, or from the list's own folder; a file it names that is missing or cannot be read stops every push and
 commit), and # for notes. An explicitly selected main list is required; the unconfigured default is optional.
+In a repository list, `publish-exact: "text"` permits one complete original line or relative path for directory
+private-word checks. Capitalization and whitespace must match. Credential checks and Git checks still apply.
 No hit is printed in full: each names its place, with the word or credential masked.
 Telonion was Push Gate: `pushgate` still runs it, and Push Gate's settings, variables, and files are read where the
 new ones are not set (telonion install moves a repository's over)."""
@@ -30,8 +32,8 @@ TEMPLATE = """# Telonion's private word list. It lives outside every repository,
 # folder. A file it names that is missing or cannot be read stops every push and every commit.
 """
 OWN_TEMPLATE = """# This repository's own word list for Telonion. It sits among git's own files, so it is never committed.
-# Its patterns add to the main list, and its `allow:` lines apply to this repository alone. Same format as the main
-# list, `include:` lines too.
+# Its patterns add to the main list, and its `allow:` lines apply to this repository alone. It can include other lists.
+# `publish-exact: "text"` is for one complete line or relative path in a prepared directory. Use a JSON string.
 """
 
 
@@ -288,7 +290,7 @@ def cmd_template(a):
 
 def _counts(words):
     """'3 patterns and 1 allow line', and what included files gave: ', 2 patterns of them from 1 included file'."""
-    text = f'{_count(len(words.words), "pattern")} and {_count(len(words.allows), "allow line")}'
+    text = f'{_count(len(words.words), "pattern")} and {_count(len(words.allows) + len(words.publish_exact), "allow line")}'
     files, patterns, allows = words.included
     if files:
         text += (f', {_count(patterns, "pattern")}' + (f' and {_count(allows, "allow line")}' if allows else '')
@@ -300,7 +302,7 @@ def _own_words(repo):
     """A repository's own list, counted ('2 patterns and 1 allow line'), or None when it has none."""
     path = own_words_path(repo)
     try:
-        words = Words.read(path, 'repository word list') if path else None
+        words = Words.read(path, 'repository word list', repository=True) if path else None
     except ListError as e:                         # its words name the list and the line
         return str(e)
     except OSError:
@@ -435,7 +437,7 @@ def main(argv):
                                                          "to date only where the template has them")
     t.set_defaults(run=cmd_template)
     w = sub.add_parser('words', help="where the word lists are (the main one and the repository's own), and how many "
-                                     "lines each holds, with the files it includes")
+                                     "lines each holds, with the files it includes", epilog=WORDS_HELP)
     w.add_argument('-C', default='.', metavar='DIR', help='the repository (default: here)')
     w.add_argument('--init', action='store_true', help='make the word list, readable by you alone')
     w.add_argument('--here', action='store_true', help="with --init: make the repository's own list instead")

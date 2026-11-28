@@ -6,7 +6,7 @@ import unittest
 
 from _helpers import TOKEN, Box
 from telonion.directory import read_file
-from telonion.scan import credential_spans, mask, read_words
+from telonion.scan import credential_spans, mask, read_commit, read_push, read_words
 
 
 class GeneratedInputs(Box):
@@ -50,6 +50,39 @@ class GeneratedInputs(Box):
                         self.assertNotIn(value, mask(text, [(s, e, 'credential') for s, e in spans]))
                     else:
                         self.assertIsNone(what)
+
+    def test_generated_git_paths_and_patch_shaped_lines(self):
+        rng = random.Random(20261128)
+        symbols = (' ', '\t', '\n', '\r', '\x1b', '"', '\\', 'é', '中', ':', '#', ';', '[', ']', '@', '-')
+        shapes = (
+            '@@ -1,0 +2,1 @@ quokka', '+++ b/not-the-file quokka', '--- a/old-file quokka',
+            ':100644 100644 1000000 2000000 A\tquokka', '\\ No newline at end of file quokka',
+        )
+        files = {}
+        for n in range(24):
+            folder = rng.choice(('nested ', 'dir"q', 'plain'))
+            name = f'{folder}/quokka-{n}-{rng.choice(symbols)}-end'
+            shape = rng.choice(shapes)
+            files[name] = (shape + '\n' + 'a' * 40 + '\n'
+                           + ':100644 100644 ' + 'a' * 40 + ' ' + 'b' * 40 + ' A\tfake\n'
+                           + '+++ b/not-the-file\n')
+        r = self.repo()
+        self.stage(r, files)
+
+        def check(result):
+            self.assertEqual((result['lines'], result['files']), (4 * len(files), len(files)))
+            self.assertEqual(len(result['private']), 2 * len(files))
+            self.assertEqual(sum(where.endswith('new file') for where, _ in result['private']), len(files))
+            self.assertNotIn('quokka', repr(result))
+            for finding in result['private']:
+                for text in finding:
+                    self.assertTrue(all(c.isprintable() for c in text))
+
+        check(read_commit(r, read_words(r)))
+        self.git(r, 'commit', '-q', '-m', 'generated paths')
+        pushed = read_push(r, ['HEAD'], [], read_words(r))
+        self.assertEqual(pushed['commits'], 1)
+        check(pushed)
 
     def test_generated_mixed_binary_offsets_keep_findings_and_hash(self):
         repo = self.repo()

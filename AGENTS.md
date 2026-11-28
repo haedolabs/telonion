@@ -15,7 +15,7 @@
 - `telonion/receipts.py`: `--receipt` saves a live preview or directory result. `TELONION_RECEIPT=1` saves receipts for pushes and live previews. Keep receipts private in the common Git directory. Save counts and the decision; never persist excerpts, URLs, or paths in a receipt.
 - `telonion/cli.py`, `bin/telonion`: the command. `bin/pushgate` is its old name, kept so the hooks written under it still run.
 - The old name, Push Gate: `OLD`, `setting`, `env`, and the fallbacks in `telonion/scan.py` read its settings (`pushgate.*`), variables (`$PUSHGATE_*`), and files (`~/.config/pushgate/`, `info/pushgate-words`) where the new ones are not set; `old_mark`, `old_names`, and `move_old_names` in `telonion/hook.py` count its hooks as Telonion's (out of date) and move a repository's names over on `telonion install`; `template_on` moves its template folder. Keep them while any repository may still hold the old names.
-- `brand/`: the finished logo, a keep with three merlons and the sapphire dot centred inside it. `docs/icon.png` is the README's icon.
+- `brand/`: the finished logo, a keep with three merlons and the sapphire dot centred inside it. `docs/icon.png` is the README's icon; `docs/name-dark.svg` and `docs/name-light.svg` are its heading, the name in two tones (the neutral and Haedo Labs™ sapphire), drawn from telonion.io's wordmark.
 - `tests/`: unittest. `tests/_helpers.py` gives each test a temporary folder and replaces git's global and system settings and the word list for its run.
 
 ## Rules of the code

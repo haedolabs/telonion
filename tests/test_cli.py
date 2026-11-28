@@ -91,6 +91,32 @@ class Command(Box):
         self.git(r, 'config', 'telonion.checkCommits', 'false')
         self.assertIn('the commit check is off here (telonion.checkCommits)', self.run_command('status', r).stdout)
 
+    def test_status_strict_reports_unhealthy_protection(self):
+        self.words('zephyr\n')
+        r = self.repo()
+        self.assertEqual(self.run_command('status', '--strict', r).returncode, 1, 'no hooks')
+        self.assertEqual(self.run_command('install', '-C', r).returncode, 0)
+        self.assertEqual(self.run_command('status', '--strict', r).returncode, 0)
+        del os.environ['TELONION_WORDS']
+        self.assertEqual(self.run_command('status', '--strict', r).returncode, 0, 'credential-only policy is valid')
+        os.environ['TELONION_WORDS'] = self.words_file
+        os.remove(os.path.join(r, '.git', 'hooks', 'pre-commit'))
+        self.assertEqual(self.run_command('status', '--strict', r).returncode, 1, 'commit check without its hook')
+        self.git(r, 'config', 'telonion.checkCommits', 'false')
+        self.assertEqual(self.run_command('status', '--strict', r).returncode, 0)
+        self.git(r, 'config', '--unset', 'telonion.checkCommits')
+        self.assertEqual(self.run_command('install', '-C', r).returncode, 0)
+        os.remove(self.words_file)
+        self.assertEqual(self.run_command('status', '--strict', r).returncode, 1, 'selected policy is missing')
+        self.words('zephyr\n')
+        origin = self.bare()
+        self.git(r, 'remote', 'add', 'origin', origin)
+        self.assertEqual(self.run_command('destination', '-C', r, 'origin').returncode, 0)
+        self.assertEqual(self.run_command('status', '--strict', r).returncode, 0)
+        self.git(r, 'remote', 'set-url', '--push', 'origin', self.bare('changed.git'))
+        self.assertEqual(self.run_command('status', '--strict', r).returncode, 1, 'approved endpoint changed')
+        self.assertEqual(self.run_command('status', r).returncode, 0, 'ordinary status remains a report')
+
     def test_check_staged(self):
         self.words('zephyr\n')
         r = self.repo()

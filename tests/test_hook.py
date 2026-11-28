@@ -422,6 +422,17 @@ class Install(Box):
         subprocess.run(['git', 'init', '-q', later], check=True)
         self.assertEqual(hook.state(later)['hook'], 'none')
 
+    def test_template_off_reports_an_unset_failure(self):
+        self.assertTrue(hook.template_on()[0])
+        lock = os.path.join(self.box, 'gitconfig.lock')
+        with open(lock, 'w'):
+            pass
+        done, words = hook.template_off()
+        self.assertFalse(done, words)
+        self.assertIn('could not be unset', words)
+        self.assertEqual(hook.template_state()['dir'], hook.own_template())
+        self.assertEqual(hook.template_state()['hook'], 'none')
+
     def test_worktrees_and_folders_inside_share_the_hook(self):
         r = self.repo()
         self.commit(r, {'a.txt': 'x\n', 'sub/b.txt': 'y\n'})

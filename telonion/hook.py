@@ -640,7 +640,9 @@ def template_off():
         os.remove(os.path.join(t['dir'], 'hooks', n))
     if ("another tool's" not in t['hooks'].values()
             and (_same(t['dir'], own_template()) or _same(t['dir'], old_template()))):
-        subprocess.run(['git', 'config', '--global', '--unset', 'init.templateDir'], capture_output=True,
-                       stdin=subprocess.DEVNULL)
+        r = subprocess.run(['git', 'config', '--global', '--unset', 'init.templateDir'], capture_output=True,
+                           stdin=subprocess.DEVNULL)
+        if r.returncode:
+            return False, "the hooks were taken out of git's template, but init.templateDir could not be unset"
         return True, "the hooks taken out of git's template, and git uses its default template again"
     return True, f"the hooks taken out of git's template ({short_path(t['dir'])})"

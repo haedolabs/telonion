@@ -35,6 +35,8 @@ bin/telonion check --staged -C ~/code/app  # what the next commit adds
 bin/telonion status ~/code/*               # hook health and destination rules
 ```
 
+`status --strict` exits `1` for a non-repository, unreadable selected policy, missing required hooks, or a changed or unavailable approved endpoint. Commit hooks are required unless `telonion.checkCommits` is `false`. Credential-only operation without a private word list is valid. Ordinary `status` remains a report.
+
 With `bin/telonion` on your `PATH`, run these in a repository to limit its pushes to approved destinations:
 
 ```bash

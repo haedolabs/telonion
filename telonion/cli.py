@@ -234,8 +234,19 @@ def _hooks_words(kinds, command, chained=()):
                                                                   else ')')
 
 
+def _healthy_status(s, problem, rules):
+    """The strict health contract: required hooks, readable selected policy, and unchanged approved endpoints."""
+    if problem or s['path'] is None:
+        return False
+    required = ['pre-push'] + (['pre-commit', 'commit-msg'] if s['commits'] else [])
+    if any(s['hooks'][name]['hook'] != 'in place' for name in required):
+        return False
+    return 'endpoint changed' not in rules and 'endpoint unavailable' not in rules
+
+
 def cmd_status(a):
     first_clean, first_problem = None, None
+    healthy = True
     for index, repo in enumerate(a.repos or ['.']):
         clean, problem = _diagnostics(repo)
         if index == 0:
@@ -244,9 +255,11 @@ def cmd_status(a):
         s = state(repo)
         if s['path'] is None:
             print(f'{place}: not a git repository')
+            healthy = False
             continue
         chained = [n for n, h in s['hooks'].items() if h['chained']]
         rules = describe_destinations(repo)
+        healthy = _healthy_status(s, problem, rules) and healthy
         deferred = bool(rules) or s['transfer']
         hooks = _hooks_words({n: h['hook'] for n, h in s['hooks'].items()}, 'telonion install',
                              [n for n in chained if n != 'pre-push' or not deferred])
@@ -265,7 +278,7 @@ def cmd_status(a):
             print(problem)
     print(first_problem or first_clean(_words_line(words_path(a.repos[0] if a.repos else '.'))))
     print(_template_line(first_clean))
-    return 0
+    return int(a.strict and not healthy)
 
 
 def _template_line(clean):
@@ -429,6 +442,8 @@ def main(argv):
     u.add_argument('-C', default='.', metavar='DIR', help='the repository (default: here)')
     u.set_defaults(run=cmd_uninstall)
     s = sub.add_parser('status', help='hook health, remote names, destination approvals, and word-list counts')
+    s.add_argument('--strict', action='store_true', help='exit 1 for missing required hooks, unreadable selected policy, '
+                                                         'a non-repository, or a changed or unavailable approved endpoint')
     s.add_argument('repos', nargs='*', metavar='DIR')
     s.set_defaults(run=cmd_status)
     t = sub.add_parser('template', help="the hooks in git's template, for every repository made or cloned from now on")

@@ -134,6 +134,8 @@ The standard Git LFS pre-push hook uploads objects to a separate service. Teloni
 
 `telonion status` checks the wrapper text, execute permission, Python executable, and readable launcher. A 0.4 wrapper still calls the current inspector. `install --update` refreshes it and updates commit hooks only where installed. `uninstall` restores the repository's hooks. `install` leaves `core.hooksPath` alone.
 
+`status --strict` exits `1` when any selected path is not a repository, selected word policy cannot be read, the pre-push hook is not in place, commit hooks are not in place while commit checking is enabled, or an approved endpoint has changed or is unavailable. `telonion.checkCommits false` makes the commit hooks optional. No private word list is required for credential-only operation. Without `--strict`, `status` remains a report; an operational error still exits `2`.
+
 A repository that holds private words on purpose, and is never made public, can turn the commit check off: `git config telonion.checkCommits false`. Its pushes are still read.
 
 `telonion template` puts the hooks in git's template, so every repository made with `git init` or `git clone` from then on has them. When git has no template folder set, Telonion makes its own from git's default template (`~/.config/telonion/template`) and sets `init.templateDir`. `telonion template --off` takes the hooks out again. `telonion template --update` brings the hooks there up to date and adds no commit check.

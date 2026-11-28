@@ -275,22 +275,28 @@ CREDENTIALS = [(what, re.compile(p, flags)) for what, p, flags in (   # fixed pr
 )]
 
 # An assignment is a candidate only when its complete name has a secret component. Splitting snake, kebab, dotted,
-# and capitalized compound names catches client_secret, DB_PASSWORD, AWS_SECRET_ACCESS_KEY, and clientSecret without
-# treating ordinary words such as secretive or tokenizer as credentials. Quoted JSON keys and unquoted values count.
+# and capitalized or compact uppercase compound names catches client_secret, DB_PASSWORD, AWS_SECRET_ACCESS_KEY,
+# clientSecret, and CLIENTSECRET without treating ordinary words such as secretive or tokenizer as credentials.
+# Quoted JSON keys and unquoted values count.
 _ASSIGNMENT = re.compile(r'''
     (?<![A-Za-z0-9_.-])
     (?:export\s+)?
     (?P<quote>["\']?)(?P<name>[A-Za-z][A-Za-z0-9_.-]*)(?P=quote)
     \s*[:=]\s*
-    (?: "[^"\s]{12,}" | \'[^\'\s]{12,}\' | [^"\'\s,;&}]{12,}(?=$|\s|[,;&}#]) )
+    (?: "[^"\s]{12,}" | \'[^\'\s]{12,}\' | [^"\'\s,;&}(]{12,}(?=$|\s|[,;&}#]) )
 ''', re.I | re.X)
+
+
+_SECRET_PARTS = frozenset(('password', 'passwd', 'secret', 'token', 'apikey'))
+_COMPACT_SECRET = re.compile(r'(?:password|passwd|secret(?:key|accesskey)?|token|apikey)$')
 
 
 def _secret_name(name):
     name = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', name)
     parts = [part for part in re.split(r'[^a-z0-9]+', name.lower()) if part]
-    return (bool({'password', 'passwd', 'secret', 'token', 'apikey'}.intersection(parts))
-            or any(parts[n:n + 2] == ['api', 'key'] for n in range(len(parts) - 1)))
+    return (bool(_SECRET_PARTS.intersection(parts))
+            or any(parts[n:n + 2] == ['api', 'key'] for n in range(len(parts) - 1))
+            or bool(_COMPACT_SECRET.search(''.join(parts))))
 
 
 KEY_FILES = re.compile(r'(?:^|/)(?:\.env(?:\.[^/]*)?|id_(?:rsa|dsa|ecdsa|ed25519)|credentials(?:\.json)?|\.netrc|\.pypirc|'
@@ -315,10 +321,11 @@ def credential_spans(text):
         for m in p.finditer(text):
             what = what or name
             spans.append(m.span())
-    for m in _ASSIGNMENT.finditer(text):
-        if _secret_name(m.group('name')):
-            what = what or 'a literal given to a secret name'
-            spans.append(m.span())
+    if '=' in text or ':' in text:
+        for m in _ASSIGNMENT.finditer(text):
+            if _secret_name(m.group('name')):
+                what = what or 'a literal given to a secret name'
+                spans.append(m.span())
     return what, spans
 
 

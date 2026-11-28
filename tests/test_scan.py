@@ -304,7 +304,8 @@ class Credentials(Box):
             with self.subTest(text=text):
                 self.assertEqual(credential_spans(text)[0], 'a literal given to a secret name')
         for text in (f'secretive = "{value}"', f'tokenizer = "{value}"', f'monkey = "{value}"',
-                     'password = "short"', 'token = ' + 'TOKEN.encode("ascii")'):
+                     'password = "short"', 'token = ' + 'TOKEN.encode("ascii")',
+                     'secret_at = ' + 'rng.choice(points)'):
             with self.subTest(text=text):
                 self.assertIsNone(credential_spans(text)[0])
 

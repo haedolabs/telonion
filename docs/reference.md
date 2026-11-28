@@ -9,9 +9,9 @@ Every commit the remote does not hold yet, each on its own:
 - the lines each commit adds, the names of the files it adds or renames, its message, and its author and committer;
 - the actual tag objects sent, including nested or renamed tags, their messages and taggers, and the names given to refs on the remote. A local tag left behind does not stop the push.
 
-A word that a later commit removed is still in the commit that added it, so it still stops the push. The hook asks the remote what it holds at push time (`git ls-remote`), so a remote that was deleted and made again empty is read as empty. If the remote cannot be asked, the hook reads the pushed history in full.
+A word that a later commit removed is still in the commit that added it, so it still stops the push. The hook asks the remote what it holds at push time (`git ls-remote`), so a remote that was deleted and made again empty is read as empty. If the remote cannot be asked, the hook reads the pushed history in full. Git replacement refs never substitute a different object for inspection.
 
-Before each commit, what that commit adds: the lines it adds, as staged (`git commit -a` and `git commit <file>` included), the names of the files it adds or renames, its author and committer, and its message as git will keep it. With an editor, git drops the message's comment lines and everything below its scissors line, and so does the check.
+Before each commit, what that commit adds: the lines it adds, as staged (`git commit -a` and `git commit <file>` included), the names of the files it adds or renames, its author and committer, and its message as git will keep it. With default cleanup and an editor, git drops the message's comment lines and everything below its scissors line, and so does the check. Explicit `verbatim`, `whitespace`, and `strip` cleanup keep text below that line; `scissors` removes it.
 
 ## Preview
 
@@ -53,7 +53,7 @@ telonion check -C "$repo" --directory "$stage" --destination "$target" --json
 
 - **Destination approval is required**, even for a text-only or empty stage. Register each site separately. `destination --remove --publish TARGET` withdraws approval. These approvals have no effect on Git pushes.
 - **File approval** binds the destination ID, full stage-relative path, and SHA-256 of the file bytes, without Git filters or line-ending conversion. Supply the path as it appears in the tree, with `/` separators and no empty, `.` or `..` segments. `approve --remove` with the same arguments withdraws that version. Removing a destination holds all its files; re-registering the same target retains its earlier file approvals. Only hashes are stored, in `telonion.publishDestination` and `telonion.publishFile` in the repository's local Git config.
-- **Content checks** cover relative names, UTF-8 text line by line, key filenames, and the usual host/install code filenames. Invalid UTF-8, non-text control bytes, and common document, archive, and media filenames require binary approval. Text in one of those named formats is still checked if the bytes are readable as UTF-8 text. Approval does not excuse a private path, a credential, or a text finding. Telonion does not decode images or unpack documents.
+- **Content checks** cover relative names, UTF-8 text line by line, key filenames, and the usual host/install code filenames. Invalid UTF-8, non-text control bytes, and common document, archive, and media filenames require binary approval. Text in one of those named formats is still checked if the bytes are readable as UTF-8 text. Readable portions of a mixed binary file also produce findings; binary approval does not clear them. Approval does not excuse a private path, a credential, or a text finding. Telonion does not decode images or unpack documents.
 - **Entry types:** regular files and directories only. A symbolic link (including at the stage root), FIFO, device, or socket makes the inspection incomplete. Directory mode needs filesystem support for descriptor-relative opens without following links.
 
 ### Result for the publisher
@@ -93,7 +93,7 @@ Each Git receipt is a separate JSON file (mode `0600`) in the common Git directo
 ## What stops a push
 
 - A word or pattern from your private list: names, places, account numbers, or anything else that must stay private.
-- A credential in one of these fixed formats: GitHub, AWS, Slack, Anthropic, OpenAI, Google, Stripe, npm, and Hugging Face tokens and keys, private key blocks, and a long literal given to a name like `password` or `token`.
+- A credential in one of these fixed formats: GitHub, AWS, Slack, Anthropic, OpenAI, Google, Stripe, npm, and Hugging Face tokens and keys, private key blocks, and a quoted or unquoted long literal given to a name like `password`, `client_secret`, or `AWS_SECRET_ACCESS_KEY`, including a JSON key.
 - A file that holds keys by its name: `.env`, `id_ed25519`, `*.pem`, `credentials.json`, and others.
 - A new file that makes code run on a hosting service or on install, such as a GitHub workflow, `package.json`, `setup.py`, `pyproject.toml`, or a `Makefile`, unless the repository lists it: `git config --add telonion.allowCode pyproject.toml`.
 - A push that rewrites or deletes a branch on the remote, or lands on a remote commit this checkout has never seen. `TELONION_ALLOW_REWRITE=1` lets one through on purpose, and `git config telonion.allowRewrite true` turns the rule off for a repository.
@@ -153,4 +153,4 @@ Telonion was called Push Gate until version 0.4.0. Nothing it set up under that 
 - A submodule pointer names a commit in another repository, which needs its own inspection. The live preview does not recurse into submodules. A release push that adds or updates a submodule pointer is held; `telonion approve` cannot clear it.
 - A hook guards against accidents, not intent: `git push --no-verify` and `git commit --no-verify` skip it.
 - The commit check runs when `git commit` makes a commit; when `git merge` makes one, only its message is read. A commit that another command makes, such as `git rebase`, `git cherry-pick`, or `git am`, may not be read until the push, which reads every commit.
-- It finds a credential by its fixed format. A password with no format of its own is found only on a line that gives it to a name like `password`.
+- It finds a credential by its fixed format. A password with no format of its own is found only on a line that gives a long, whitespace-free value to a secret name such as `password`, `client_secret`, or `token`; the name can use snake, kebab, dotted, or capitalized compound forms, and the value can be quoted or unquoted.

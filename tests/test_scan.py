@@ -4,7 +4,7 @@ import os
 import unittest
 
 from _helpers import TOKEN, Box
-from telonion.scan import GitError, Words, fetched, own_words_path, read_commit, read_push, read_words
+from telonion.scan import GitError, Words, credential_spans, fetched, own_words_path, read_commit, read_push, read_words
 
 WORDS = '# a note\npat\nsample\n\\bzephyr\\b\nproject-x\nallow: zephyr-free\nallow: sample\\.org/pat\n'
 
@@ -294,6 +294,28 @@ class Credentials(Box):
         self.assertTrue(any(w.startswith('commit ') for w, _, _ in hits), 'a token in a commit message')
         hits = self.again({'c.py': 'API_KEY' + ' = "abcdefghijklmnop"\n'})['credentials']   # joined here, so this file holds none
         self.assertEqual([what for _, what, _ in hits], ['a literal given to a secret name'])
+
+    def test_common_secret_assignment_forms(self):
+        value = 'made-up-value-1234'
+        for text in (
+                f'client_secret = "{value}"', f'DB_PASSWORD = "{value}"',
+                f'AWS_SECRET_ACCESS_KEY = "{value}"', f'clientSecret = "{value}"',
+                f'{{"password": "{value}"}}', f'token={value}', f'export API_KEY={value}'):
+            with self.subTest(text=text):
+                self.assertEqual(credential_spans(text)[0], 'a literal given to a secret name')
+        for text in (f'secretive = "{value}"', f'tokenizer = "{value}"', f'monkey = "{value}"',
+                     'password = "short"', 'token = ' + 'TOKEN.encode("ascii")'):
+            with self.subTest(text=text):
+                self.assertIsNone(credential_spans(text)[0])
+
+    def test_an_unquoted_secret_added_to_an_existing_key_file(self):
+        self.git(self.r, 'remote', 'add', 'origin', self.origin)
+        self.git(self.r, 'push', '-q', 'origin', 'main')
+        self.commit(self.r, {'.env': 'PUBLIC=yes\n'})
+        self.git(self.r, 'push', '-q', 'origin', 'main')
+        value = 'made-up-' + 'value-1234'
+        self.commit(self.r, {'.env': 'PUBLIC=yes\nCLIENT_SECRET=' + value + '\n'})
+        self.assertIn('a literal given to a secret name', [what for _, what, _ in self.read()['credentials']])
 
     def test_new_files_that_run_code(self):
         self.git(self.r, 'remote', 'add', 'origin', self.origin)

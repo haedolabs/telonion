@@ -81,8 +81,8 @@ def _entries(parent, prefix=''):
             raise DirectoryError('unsupported_entry')
 
 
-def _text_reasons(text, words):
-    if words and text not in words.publish_exact and words.spans(text):
+def _text_reasons(text, words, exact=True):
+    if words and (not exact or text not in words.publish_exact) and words.spans(text):
         yield 'private_word'
     if credential_spans(text)[0]:
         yield 'credential'
@@ -92,15 +92,17 @@ _NON_TEXT = re.compile(rb'[\x00-\x08\x0e-\x1f\x7f]')
 
 
 def read_file(parent, name, info, *, inspect=False, words=None):
-    """Hash every byte. Scan complete UTF-8 lines from those same reads, including a line spanning many blocks."""
+    """Hash every byte and scan complete lines from those reads, including readable parts of a mixed binary file."""
     digest = hashlib.sha256()
     decoder = io.IncrementalNewlineDecoder(codecs.getincrementaldecoder('utf-8-sig')(), True)
-    text, pending, line_number, first = True, [], 0, {}
+    readable = (io.IncrementalNewlineDecoder(codecs.getincrementaldecoder('utf-8-sig')('ignore'), True, 'ignore')
+                if inspect else None)
+    text, pending, pending_exact, line_number, first = True, [], True, 0, {}
 
-    def check_line(line):
+    def check_line(line, exact):
         nonlocal line_number
         line_number += 1
-        for reason in _text_reasons(line, words):
+        for reason in _text_reasons(line, words, exact):
             first.setdefault(reason, line_number)
 
     with _opened(parent, name, info, directory=False) as fd, open(fd, 'rb', closefd=False) as stream:
@@ -111,26 +113,27 @@ def read_file(parent, name, info, *, inspect=False, words=None):
                 text = not _NON_TEXT.search(block)
                 if text:
                     try:
-                        decoded = decoder.decode(block, final=not block)
+                        decoder.decode(block, final=not block)
                     except UnicodeDecodeError:
                         text = False
-                if not text:
-                    pending.clear()
-                    first.clear()
-                elif inspect:
-                    lines = decoded.split('\n')
-                    pending.append(lines[0])
-                    if len(lines) > 1:
-                        check_line(''.join(pending))
-                        for line in lines[1:-1]:
-                            check_line(line)
-                        pending = [lines[-1]]
+            if inspect:
+                decoded = readable.decode(block, final=not block)
+                lines = decoded.split('\n')
+                pending.append(lines[0])
+                if len(lines) > 1:
+                    check_line(''.join(pending), pending_exact and text)
+                    for line in lines[1:-1]:
+                        check_line(line, text)
+                    pending = [lines[-1]]
+                    pending_exact = text
+                else:
+                    pending_exact = pending_exact and text
             if not block:
                 break
         if stream.tell() != info.st_size:
             raise DirectoryError('directory_changed')
     if any(pending):
-        check_line(''.join(pending))
+        check_line(''.join(pending), pending_exact)
     return digest.digest(), bool(not text or OPAQUE_NAME.search(name)), first
 
 

@@ -70,6 +70,19 @@ class Inspection(Box):
             path.write_text(hook.hook_body())
             self.assertEqual(hook.state(self.r)['hook'], 'command unavailable')
 
+    def test_replacement_objects_never_change_what_is_inspected(self):
+        original = self.commit(self.r, {'payload.txt': 'quokka\n'}, 'original')
+        self.git(self.r, 'reset', '-q', '--hard', self.base)
+        replacement = self.commit(self.r, {'payload.txt': 'clean\n'}, 'replacement')
+        self.git(self.r, 'update-ref', 'refs/heads/main', original)
+        self.git(self.r, 'replace', original, replacement)
+        self.assertTrue(hook.install(self.r, update=True)[0])
+        p = self.push('main')
+        self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn('[private]', p.stdout + p.stderr)
+        self.assertNotIn('quokka', p.stdout + p.stderr)
+        self.assertEqual(self.git(self.r, 'ls-remote', 'origin'), '')
+
     def test_preview_and_hook_read_only_outgoing_tags(self):
         self.git(self.r, 'tag', '-a', 'v1', '-m', 'quokka')
         self.assertTrue(hook.install(self.r)[0])

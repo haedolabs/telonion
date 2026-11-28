@@ -30,7 +30,7 @@ def git(repo, *args, stdin=None, timeout=None, env=None, binary=False):
     """Git's output. Its diagnostics can contain URLs, ref names, and private paths; never relay them."""
     io = dict(input=stdin) if stdin is not None else dict(stdin=subprocess.DEVNULL)
     try:
-        r = subprocess.run(['git', '-C', repo, '-c', 'core.quotePath=false', *args], capture_output=True,
+        r = subprocess.run(['git', '--no-replace-objects', '-C', repo, '-c', 'core.quotePath=false', *args], capture_output=True,
                             encoding=None if binary else 'utf-8', errors=None if binary else 'replace',
                             timeout=timeout, env=env, **io)
     except subprocess.TimeoutExpired:
@@ -272,8 +272,27 @@ CREDENTIALS = [(what, re.compile(p, flags)) for what, p, flags in (   # fixed pr
     ('a Stripe live key', r'\b[rs]k_live_[0-9A-Za-z]{24,}', 0),
     ('an npm token', r'\bnpm_[A-Za-z0-9]{36}\b', 0),
     ('a Hugging Face token', r'\bhf_[A-Za-z0-9]{34,}\b', 0),
-    ('a literal given to a secret name', r'\b(?:password|passwd|secret|api[_-]?key|token)\s*[:=]\s*["\'][^"\'\s]{12,}["\']', re.I),
 )]
+
+# An assignment is a candidate only when its complete name has a secret component. Splitting snake, kebab, dotted,
+# and capitalized compound names catches client_secret, DB_PASSWORD, AWS_SECRET_ACCESS_KEY, and clientSecret without
+# treating ordinary words such as secretive or tokenizer as credentials. Quoted JSON keys and unquoted values count.
+_ASSIGNMENT = re.compile(r'''
+    (?<![A-Za-z0-9_.-])
+    (?:export\s+)?
+    (?P<quote>["\']?)(?P<name>[A-Za-z][A-Za-z0-9_.-]*)(?P=quote)
+    \s*[:=]\s*
+    (?: "[^"\s]{12,}" | \'[^\'\s]{12,}\' | [^"\'\s,;&}]{12,}(?=$|\s|[,;&}#]) )
+''', re.I | re.X)
+
+
+def _secret_name(name):
+    name = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', name)
+    parts = [part for part in re.split(r'[^a-z0-9]+', name.lower()) if part]
+    return (bool({'password', 'passwd', 'secret', 'token', 'apikey'}.intersection(parts))
+            or any(parts[n:n + 2] == ['api', 'key'] for n in range(len(parts) - 1)))
+
+
 KEY_FILES = re.compile(r'(?:^|/)(?:\.env(?:\.[^/]*)?|id_(?:rsa|dsa|ecdsa|ed25519)|credentials(?:\.json)?|\.netrc|\.pypirc|'
                        r'[^/]*\.(?:pem|p12|pfx|key|keystore|jks|mobileprovision))$', re.I)
 KEY_FILES_OK = re.compile(r'\.env\.(?:example|sample|template)$')
@@ -295,6 +314,10 @@ def credential_spans(text):
     for name, p in CREDENTIALS:
         for m in p.finditer(text):
             what = what or name
+            spans.append(m.span())
+    for m in _ASSIGNMENT.finditer(text):
+        if _secret_name(m.group('name')):
+            what = what or 'a literal given to a secret name'
             spans.append(m.span())
     return what, spans
 

@@ -282,6 +282,27 @@ class Directory(Box):
         file.write_bytes(b'x' * (128 * 1024 - 1) + 'é'.encode())
         self.assertEqual(self.check(0)['binary'], 0)
 
+    def test_mixed_binary_files_keep_text_findings_after_approval(self):
+        self.enroll()
+        file = self.root / 'data'
+        token = TOKEN.encode('ascii')
+        bodies = (
+            token + b' quokka\n\x00',
+            token + b' quokka\n' + b'x' * (128 * 1024) + b'\xff',
+        )
+        for body in bodies:
+            with self.subTest(size=len(body)):
+                file.write_bytes(body)
+                self.assertEqual(self.check(1)['reasons'], ['binary_unapproved', 'credential', 'private_word'])
+                self.assertEqual(self.approve('data').returncode, 0)
+                self.assertEqual(self.check(1)['reasons'], ['credential', 'private_word'])
+        own = Path(self.repo_dir, '.git/info/telonion-words')
+        own.write_text('publish-exact: "quokka"\n')
+        file.write_bytes(b'quokka\xff\n')
+        self.assertEqual(self.check(1)['reasons'], ['binary_unapproved', 'private_word'])
+        self.assertEqual(self.approve('data').returncode, 0)
+        self.assertEqual(self.check(1)['reasons'], ['private_word'])
+
     def test_symlinks_and_special_files_are_incomplete_and_never_approved(self):
         self.enroll()
         outside = Path(self.box, 'outside')

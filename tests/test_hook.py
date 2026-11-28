@@ -309,6 +309,25 @@ class Install(Box):
     def push(self, repo):
         return subprocess.run(['git', '-C', repo, 'push', '-q', 'origin', 'main'], capture_output=True, text=True)
 
+    def test_explicit_cleanup_modes_keep_text_below_scissors_on_real_commits(self):
+        self.words('zephyr\n')
+        editor = os.path.join(self.box, 'editor')
+        self.write(editor, '#!/bin/sh\nprintf "edited\\n" >> "$1"\n')
+        for mode in ('verbatim', 'whitespace', 'strip'):
+            with self.subTest(mode=mode):
+                r = self.repo('cleanup-' + mode)
+                self.git(r, 'config', 'commit.cleanup', mode)
+                self.assertTrue(hook.install(r)[0])
+                self.stage(r, {'clean.txt': 'clean\n'})
+                message = os.path.join(r, 'message')
+                with open(message, 'w') as f:
+                    f.write('subject\n# ------------------------ >8 ------------------------\nzephyr stays in the message\n')
+                p = subprocess.run(['git', '-C', r, 'commit', '-q', '-t', message],
+                                   env=dict(os.environ, GIT_EDITOR=editor), capture_output=True, text=True)
+                self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn('private word: commit message: [private] stays in the message', p.stderr)
+                self.assertNotIn('zephyr', p.stderr)
+
     def test_the_repositorys_own_hook_is_kept_and_runs_first(self):
         self.words('zephyr\n')
         r, origin = self.repo(), self.bare()

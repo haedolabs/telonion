@@ -34,7 +34,8 @@ def old_mark(name):
 
 
 def _ancestor(repo, older, newer):
-    r = subprocess.run(['git', '-C', repo, 'merge-base', '--is-ancestor', older, newer], capture_output=True,
+    r = subprocess.run(['git', '--no-replace-objects', '-C', repo, 'merge-base', '--is-ancestor', older, newer],
+                       capture_output=True,
                        stdin=subprocess.DEVNULL)
     if r.returncode not in (0, 1):
         raise GitError('git could not compare the two commits')
@@ -255,11 +256,12 @@ def prepush(argv, refs, repo=None, first=None, save=False):
 
 
 def kept_message(text, repo):
-    """A commit message as git keeps it. With an editor, git cuts the message at its scissors line and, by default,
-    drops its comment lines; with none (git tells hooks so with GIT_EDITOR=:), it keeps every line by default.
-    commit.cleanup changes the default, as it does for git."""
+    """A commit message as git keeps it. With default cleanup and an editor, git cuts at its scissors line and drops
+    comments; with none (GIT_EDITOR=:), it keeps comments by default. Explicit verbatim, whitespace, and strip cleanup
+    do not cut at scissors; scissors does. Other commit.cleanup changes follow git."""
     editor = os.environ.get('GIT_EDITOR') != ':'
-    mode = (config(repo, 'commit.cleanup') or ['default'])[-1].lower()
+    configured = (config(repo, 'commit.cleanup') or ['default'])[-1].lower()
+    mode = configured
     if mode == 'default':
         mode = 'strip' if editor else 'whitespace'
     comment = (config(repo, 'core.commentString') or config(repo, 'core.commentChar') or ['#'])[-1]
@@ -267,7 +269,7 @@ def kept_message(text, repo):
         comment = '#'
     lines = text.split('\n')
     cut = f'{comment} {CUT}'
-    if (editor or mode == 'scissors') and cut in lines:
+    if (configured == 'scissors' or (configured == 'default' and editor)) and cut in lines:
         lines = lines[:lines.index(cut)]
     if mode == 'strip':
         lines = [line for line in lines if not line.startswith(comment)]

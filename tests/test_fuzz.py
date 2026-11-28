@@ -5,8 +5,9 @@ import random
 import unittest
 
 from _helpers import TOKEN, Box
+from telonion import fingerprint
 from telonion.directory import read_file
-from telonion.scan import credential_spans, mask, read_commit, read_push, read_words
+from telonion.scan import cleaner, credential_spans, mask, read_commit, read_push, read_words
 
 
 class GeneratedInputs(Box):
@@ -83,6 +84,78 @@ class GeneratedInputs(Box):
         pushed = read_push(r, ['HEAD'], [], read_words(r))
         self.assertEqual(pushed['commits'], 1)
         check(pushed)
+
+    def test_generated_merge_renames_nested_tags_and_binary_inventory(self):
+        rng = random.Random(20261128)
+        symbols = (' ', '\t', '\n', '\r', '\x1b', '"', '\\', 'é', '中', ':', '#', ';', '[', ']', '@', '-')
+        r = self.repo()
+        self.stage(r, {'base.txt': 'safe\n'})
+        self.git(r, 'commit', '-q', '-m', 'base')
+        self.git(r, 'checkout', '-q', '-b', 'side')
+        side_path = 'nested /quokka-merge-\n-end'
+        self.stage(r, {side_path: '+++ b/not-the-file quokka\n'})
+        self.git(r, 'commit', '-q', '-m', 'side')
+        self.git(r, 'checkout', '-q', 'main')
+
+        paths = []
+        for n in range(8):
+            folder = rng.choice(('nested ', 'dir"q', 'plain'))
+            symbol = rng.choice(symbols)
+            old = f'{folder}/quokka-old-{n}-{symbol}.bin'
+            new = f'{folder}/quokka-new-{n}-{symbol}.bin'
+            paths.append((old, new))
+
+        def put(name, body):
+            path = os.path.join(r, name)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'wb') as f:
+                f.write(body)
+
+        for n, (old, _) in enumerate(paths):
+            put(old, b'\x00' + bytes((n,)) + b' first')
+        self.git(r, 'add', '-A')
+        self.git(r, 'commit', '-q', '-m', 'binary files')
+        binary_commit = self.head(r)
+        self.git(r, 'merge', '-q', '--no-ff', '--no-commit', 'side')
+        self.git(r, 'commit', '-q', '-m', 'merge')
+        for old, new in paths:
+            os.rename(os.path.join(r, old), os.path.join(r, new))
+        self.git(r, 'add', '-A')
+        self.git(r, 'commit', '-q', '-m', 'renames')
+        rename_commit = self.head(r)
+        for n, (_, new) in enumerate(paths):
+            put(new, b'\x00' + bytes((n,)) + b' second')
+        self.git(r, 'add', '-A')
+        self.git(r, 'commit', '-q', '-m', 'new binary versions')
+        modified_commit = self.head(r)
+        self.git(r, 'tag', '-a', 'inner-é', '-m', 'quokka inner')
+        inner = self.head(r, 'refs/tags/inner-é')
+        self.git(r, 'tag', '-a', 'outer-中', '-m', 'quokka outer', inner)
+        outer = self.head(r, 'refs/tags/outer-中')
+
+        words = read_words(r)
+        clean = cleaner(words)
+        expected = set()
+        for old, new in paths:
+            for commit, path in ((binary_commit, old), (rename_commit, new), (modified_commit, new)):
+                oid = self.git(r, 'rev-parse', f'{commit}:{path}').strip()
+                expected.add((clean(path), fingerprint(path, oid), commit, 'file'))
+        pushed = read_push(r, [outer], [], words, tag_refs=(), ref_names=('refs/tags/published-quokka-é',))
+        self.assertEqual(pushed['commits'], 6)
+        self.assertEqual(pushed['lines'], 3)
+        self.assertEqual(pushed['files'], 2 * len(paths) + 2)
+        self.assertEqual(len(pushed['private']), 2 * len(paths) + 5)
+        self.assertEqual(set(pushed['opaque']), expected)
+        self.assertNotIn('quokka', repr(pushed))
+        wheres = {where for where, _ in pushed['private']}
+        self.assertIn('tag inner-é', wheres)
+        self.assertIn('tag outer-中', wheres)
+        self.assertIn('ref on the remote', wheres)
+        for finding in pushed['private']:
+            for text in finding:
+                self.assertTrue(all(c.isprintable() for c in text))
+        for path, _, _, _ in pushed['opaque']:
+            self.assertTrue(all(c.isprintable() for c in path))
 
     def test_generated_mixed_binary_offsets_keep_findings_and_hash(self):
         repo = self.repo()

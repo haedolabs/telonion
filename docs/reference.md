@@ -93,7 +93,7 @@ Each Git receipt is a separate JSON file (mode `0600`) in the common Git directo
 ## What stops a push
 
 - A word or pattern from your private list: names, places, account numbers, or anything else that must stay private.
-- A credential in one of these fixed formats: GitHub, AWS, Slack, Anthropic, OpenAI, Google, Stripe, npm, and Hugging Face tokens and keys, private key blocks, and a quoted or unquoted long literal given to a name like `password`, `client_secret`, or `AWS_SECRET_ACCESS_KEY`, including a JSON key.
+- A credential in one of these fixed formats: GitHub, AWS, Slack, Anthropic, OpenAI, Google, Stripe, npm, and Hugging Face tokens and keys, private key blocks, and a quoted or unquoted long literal given to a name like `password`, `client_secret`, or `AWS_SECRET_ACCESS_KEY`, including a JSON key. Under a token, key, or secret name, the literal holds a digit, as a generated value does; a header name, a path, a variable, or a `{…}` or `${…}` placeholder is not one. Under a password name, any long literal counts.
 - A file that holds keys by its name: `.env`, `id_ed25519`, `*.pem`, `credentials.json`, and others.
 - A new file that makes code run on a hosting service or on install, such as a GitHub workflow, `package.json`, `setup.py`, `pyproject.toml`, or a `Makefile`, unless the repository lists it: `git config --add telonion.allowCode pyproject.toml`.
 - A push that rewrites or deletes a branch on the remote, or lands on a remote commit this checkout has never seen. `TELONION_ALLOW_REWRITE=1` lets one through on purpose, and `git config telonion.allowRewrite true` turns the rule off for a repository.

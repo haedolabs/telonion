@@ -292,7 +292,7 @@ class Credentials(Box):
         self.assertEqual(sorted(names), ['.env', 'cert.pem', 'keys/id_ed25519'])
         hits = self.again({'b.txt': 'nothing\n'}, f'key {TOKEN}')['credentials']
         self.assertTrue(any(w.startswith('commit ') for w, _, _ in hits), 'a token in a commit message')
-        hits = self.again({'c.py': 'API_KEY' + ' = "abcdefghijklmnop"\n'})['credentials']   # joined here, so this file holds none
+        hits = self.again({'c.py': 'API_KEY' + ' = "abcdefgh12345678"\n'})['credentials']   # joined here, so this file holds none
         self.assertEqual([what for _, what, _ in hits], ['a literal given to a secret name'])
 
     def test_common_secret_assignment_forms(self):
@@ -308,6 +308,29 @@ class Credentials(Box):
                      'secret_at = ' + 'rng.choice(points)'):
             with self.subTest(text=text):
                 self.assertIsNone(credential_spans(text)[0])
+
+    def test_a_placeholder_is_not_a_literal(self):
+        for text in ('print(f"peer-token: {peers.TOKEN_FILE} (written, mode 0600)")',
+                     'auth_token: ${config.access_token_value}', 'API_KEY={settings.api_key_value}',
+                     'url = f"https://example.test/?token={session.token_value}"'):
+            with self.subTest(text=text):
+                self.assertIsNone(credential_spans(text)[0])
+        value = 'made-up-' + 'value-1234'
+        for text in ('{token: ' + value + '}', 'token: ' + value + '}', 'API_KEY=' + value + '{x}'):
+            with self.subTest(text=text):
+                self.assertEqual(credential_spans(text)[0], 'a literal given to a secret name')
+
+    def test_a_token_key_or_secret_literal_holds_a_digit(self):
+        for text in ('tokenHeader = "X-Extension-Token"', '"token": "/tmp/example.token",',
+                     'let token = e.token.isEmpty ? nil : e.token', "manifest(token_header='Authorization')",
+                     '{"token": "example.token"}', 'manifest(token=token_path)', "{'x-api-key': 'the-clients-own'}"):
+            with self.subTest(text=text):
+                self.assertIsNone(credential_spans(text)[0])
+        value = 'made-up-' + 'value-1234'
+        for text in ('token = "' + value + '"', 'client' + '_secret: ' + value, 'pass' + 'word = "correct-horse-battery"',
+                     'DB' + 'PASSWD=' + 'correcthorsebattery'):
+            with self.subTest(text=text):
+                self.assertEqual(credential_spans(text)[0], 'a literal given to a secret name')
 
     def test_an_unquoted_secret_added_to_an_existing_key_file(self):
         self.git(self.r, 'remote', 'add', 'origin', self.origin)

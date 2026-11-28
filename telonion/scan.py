@@ -277,26 +277,39 @@ CREDENTIALS = [(what, re.compile(p, flags)) for what, p, flags in (   # fixed pr
 # An assignment is a candidate only when its complete name has a secret component. Splitting snake, kebab, dotted,
 # and capitalized or compact uppercase compound names catches client_secret, DB_PASSWORD, AWS_SECRET_ACCESS_KEY,
 # clientSecret, and CLIENTSECRET without treating ordinary words such as secretive or tokenizer as credentials.
-# Quoted JSON keys and unquoted values count.
+# Quoted JSON keys and unquoted values count. An unquoted value that opens a placeholder or a reference, such as
+# {name} or ${name}, names where a value comes from and is not a literal. Under a token, key, or secret name, a
+# literal holds a digit, as a generated value does; one without, such as a header name, a path, or a variable, is
+# not one. Under a password name, any literal counts.
 _ASSIGNMENT = re.compile(r'''
     (?<![A-Za-z0-9_.-])
     (?:export\s+)?
     (?P<quote>["\']?)(?P<name>[A-Za-z][A-Za-z0-9_.-]*)(?P=quote)
     \s*[:=]\s*
-    (?: "[^"\s]{12,}" | \'[^\'\s]{12,}\' | [^"\'\s,;&}(]{12,}(?=$|\s|[,;&}#]) )
+    (?P<value> "[^"\s]{12,}" | \'[^\'\s]{12,}\' | (?!\$?\{)[^"\'\s,;&}(]{12,}(?=$|\s|[,;&}#]) )
 ''', re.I | re.X)
 
 
 _SECRET_PARTS = frozenset(('password', 'passwd', 'secret', 'token', 'apikey'))
 _COMPACT_SECRET = re.compile(r'(?:password|passwd|secret(?:key|accesskey)?|token|apikey)$')
+_COMPACT_PASSWORD = re.compile(r'(?:password|passwd)$')
+
+
+def _name_parts(name):
+    name = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', name)
+    return [part for part in re.split(r'[^a-z0-9]+', name.lower()) if part]
 
 
 def _secret_name(name):
-    name = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', name)
-    parts = [part for part in re.split(r'[^a-z0-9]+', name.lower()) if part]
+    parts = _name_parts(name)
     return (bool(_SECRET_PARTS.intersection(parts))
             or any(parts[n:n + 2] == ['api', 'key'] for n in range(len(parts) - 1))
             or bool(_COMPACT_SECRET.search(''.join(parts))))
+
+
+def _password_name(name):
+    parts = _name_parts(name)
+    return bool({'password', 'passwd'}.intersection(parts)) or bool(_COMPACT_PASSWORD.search(''.join(parts)))
 
 
 KEY_FILES = re.compile(r'(?:^|/)(?:\.env(?:\.[^/]*)?|id_(?:rsa|dsa|ecdsa|ed25519)|credentials(?:\.json)?|\.netrc|\.pypirc|'
@@ -323,7 +336,8 @@ def credential_spans(text):
             spans.append(m.span())
     if '=' in text or ':' in text:
         for m in _ASSIGNMENT.finditer(text):
-            if _secret_name(m.group('name')):
+            name = m.group('name')
+            if _secret_name(name) and (_password_name(name) or any(c.isdigit() for c in m.group('value'))):
                 what = what or 'a literal given to a secret name'
                 spans.append(m.span())
     return what, spans

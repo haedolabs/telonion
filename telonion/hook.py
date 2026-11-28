@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import sys
 
-from . import NAME, count, fingerprint, listed, short_path
+from . import NAME, count, credits, fingerprint, listed, short_path
 from .destinations import destinations, endpoint, label, named_endpoint
 from .receipts import inspection_record, save_receipt
 from .scan import (OBJECT_ID, OLD, GitError, ListError, advertised, cleaner, config, env, own_words_path, present,
@@ -78,7 +78,8 @@ def _hits(r):
     for kind, items, say in (('private', r['private'], lambda h: f'private word: {h[0]}: {h[1]}'),
                              ('credential', r['credentials'], lambda h: f'{h[1]}: {h[0]}: {h[2]}'),
                              ('code', r.get('code', []),
-                              lambda h: f'a file that runs code on a host or on install: {h[0]}: {h[1]}')):
+                              lambda h: f'a file that runs code on a host or on install: {h[0]}: {h[1]}'),
+                             ('credit', r.get('credits', []), lambda h: f'{h[0]}: {h[1]} credits an assistant')):
         stops += [(kind, say(h)) for h in items[:LIMIT]]
         if len(items) > LIMIT:
             stops.append((kind, f'... and {len(items) - LIMIT} more'))
@@ -123,6 +124,8 @@ def _read_updates(repo, refs, remote, url, words, stops, notes):
             stop = []
             notes.append('could not list the remote refs; the full outgoing history was read')
     reading = read_push(repo, tips, stop, words, setting(repo, 'allowCode', both=True), tag_refs=(), ref_names=names)
+    if credits.on(repo):
+        reading['credits'] = credits.in_push(repo, tips, stop)
     reading['ref_updates'] = len(refs.splitlines())
     return reading
 
@@ -168,6 +171,8 @@ def _push_lines(repo, remote, r, words, stops, notes):
             f"{count(r['files'], 'new file name')}") if r is not None else None
     if not stops:
         found = 'no private-word or credential matches' if words is not None else 'no credential matches'
+        if r is not None and 'credits' in r:
+            found += ', and no credit lines'
         return [f'{NAME}: {read or "nothing new"} read for {remote}: {found}', *('  ' + n for n in notes)]
     lines = [f'{NAME}: the push to {remote} is stopped']
     if read:
@@ -184,6 +189,9 @@ def _push_lines(repo, remote, r, words, stops, notes):
         lines.append('  A credential that was ever pushed anywhere is revoked, not only removed.')
     if 'code' in kinds:
         lines.append('  A file meant to run code: git config --add telonion.allowCode <path or pattern>')
+    if 'credit' in kinds:
+        lines.append("  A credit line stays in the commit that has it: reword that commit's message before it leaves. "
+                     'Where co-authors are people: git config telonion.holdCredits false')
     if 'rewrite' in kinds:
         lines.append('  A rewrite or a deletion on purpose: TELONION_ALLOW_REWRITE=1 for one push.')
     return lines + [f'  {n}' for n in notes]
@@ -302,7 +310,10 @@ def commit_hook(name, argv, repo=None, first=None):
             if not argv:
                 raise OSError('git named no message file')
             with open(argv[0], encoding='utf-8', errors='replace') as f:
-                r = read_commit(repo, words, staged=False, message=kept_message(f.read(), repo))
+                kept = kept_message(f.read(), repo)
+            r = read_commit(repo, words, staged=False, message=kept)
+            if credits.on(repo):
+                r['credits'] = credits.in_message(kept)
     except GitError as e:
         stops.append(('error', f'could not read what the commit adds: {e}'))
     except OSError:
@@ -314,11 +325,13 @@ def commit_hook(name, argv, repo=None, first=None):
         read = (f"{count(r['lines'], 'added line')} and {count(r['files'], 'new file name')} read for the commit"
                 if name == 'pre-commit' else 'the commit message read')
         found = 'nothing private and no credentials' if words is not None else 'no credentials'
+        if 'credits' in r:
+            found = found.replace(' and no credentials', ', no credentials,') + ' and no credit lines'
         return 0, [f'{NAME}: {read}: {found}'] + [f'  {n}' for n in notes]
     clean = cleaner(words)
     kinds = {k for k, _ in stops}
     lines = [f'{NAME}: the commit is stopped'] + [f'  {clean(w)}' for _, w in stops]
-    if kinds & {'private', 'credential'}:
+    if kinds & {'private', 'credential', 'credit'}:
         lines.append('  Nothing was committed: take it out of ' + ('what is staged' if name == 'pre-commit' else
                                                                    'the message') + ', then commit again.')
     if 'private' in kinds:

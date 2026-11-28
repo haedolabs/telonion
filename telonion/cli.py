@@ -4,7 +4,7 @@ import json
 import os
 import sys
 
-from . import NAME, VERSION, count as _count, listed, short_path as _home
+from . import NAME, VERSION, count as _count, credits, listed, short_path as _home
 from .destinations import approve_file, describe_destinations, label, set_destination, set_publish_destination
 from .directory import approve_directory_file, incomplete, inspect_directory
 from .hook import HOOKS, commit_hook, inspect_push, install, prepush, state, template_off, template_on, template_state, uninstall
@@ -51,7 +51,12 @@ def _report(r, words, path):
         print(f'  new files that run code on a host or on install: {len(r["code"]) or "none"}')
         for where, name in r['code']:
             print(f'    {where}: {name}')
-    return 1 if r['private'] or r['credentials'] or r.get('code') else 0
+    if 'credits' in r:
+        clean = cleaner(words)
+        print(f'  credit lines: {len(r["credits"]) or "none"}')
+        for where, what in r['credits']:
+            print(clean(f'    {where}: {what}'))
+    return 1 if r['private'] or r['credentials'] or r.get('code') or r.get('credits') else 0
 
 
 def _directory_result(record, messages, as_json):
@@ -113,6 +118,8 @@ def cmd_check(a):
                 return 2
         try:
             r = read_commit(repo, words, message=message)
+            if message is not None and credits.on(repo):
+                r['credits'] = credits.in_message(message)
         except GitError as e:
             print(f'nothing read: {e}')
             return 2
@@ -129,6 +136,8 @@ def cmd_check(a):
             against = (f'what this checkout last fetched from {label(remote)}' if stop
                        else f'every commit {tip} reaches (nothing was fetched from {label(remote)})')
         r = read_push(repo, [tip], stop, words, setting(repo, 'allowCode', both=True))
+        if credits.on(repo):
+            r['credits'] = credits.in_push(repo, [tip], stop)
     except GitError as e:
         print(f'nothing read: {e}')
         return 2
@@ -393,7 +402,8 @@ def main(argv):
     p = _Parser(prog='telonion', description=ABOUT, epilog=WORDS_HELP)
     p.add_argument('--version', action='version', version=f'{NAME} {VERSION}')
     sub = p.add_subparsers(dest='command', metavar='command')
-    c = sub.add_parser('check', help='inspect a prepared directory, a live push, staged changes, or an offline estimate')
+    c = sub.add_parser('check', help='inspect a prepared directory, a live push, staged changes, or an offline estimate',
+                       epilog='With telonion.holdCredits true, commit and tag messages are read for credit lines too.')
     c.add_argument('-C', default='.', metavar='DIR', help='the repository supplying policy and approvals (default: here)')
     c.add_argument('--remote', help='the remote to preview (Git’s default on a live check without refspecs; else origin)')
     how = c.add_mutually_exclusive_group()
